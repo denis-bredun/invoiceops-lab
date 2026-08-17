@@ -1,0 +1,949 @@
+# ==============================================================================
+# InvoiceOps Lab monorepo — .gitignore
+# Context: RPA / Power Platform / Dataverse / PAD / UiPath / AA / n8n /
+#          Python / .NET / Node / Cloudflare Workers+D1 / PostgreSQL / SQLite /
+#          Robot Framework / Power BI / PM4Py / GitHub Actions.
+#
+# Policy:
+# - Commit source code, migrations, tests, deterministic configuration and lock files.
+# - Never commit credentials, auth profiles, tokens, local runtime state, databases,
+#   build outputs, caches, transient logs/screenshots, or workstation-specific state.
+# - Do NOT blanket-ignore reports/, analytics/, *.pbix, *.pdf, *.json or *.csv:
+#   InvoiceOps intentionally has generated/test/release artifacts that may be tracked
+#   or attached to releases later. Ignore only explicitly-local/generated locations.
+# ==============================================================================
+
+
+# ==============================================================================
+# 1. OPERATING SYSTEM / FILE EXPLORER NOISE
+# ==============================================================================
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# macOS (harmless if the repo is ever opened there)
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux desktop / editor trash
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+
+# ==============================================================================
+# 2. EDITORS / IDEs / USER-SPECIFIC WORKSTATION STATE
+# ==============================================================================
+
+# Visual Studio
+.vs/
+**/.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.userprefs
+*.DotSettings.user
+*.csproj.user
+*.vcxproj.user
+
+# VS Code: local/user workspace state is ignored by default.
+# If later you intentionally want shared workspace settings, explicitly force-add
+# only reviewed files (for example: git add -f .vscode/extensions.json).
+.vscode/
+**/.vscode/
+
+# JetBrains / other IDEs
+.idea/
+**/.idea/
+*.iml
+.history/
+**/.history/
+
+# Temporary editor files
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+*.rej
+*.autosave
+
+
+# ==============================================================================
+# 3. SECRETS / CREDENTIALS / TOKENS / LOCAL CONFIG
+# ==============================================================================
+
+# Generic dotenv files.
+# Templates/examples are explicitly allowed.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.defaults
+!**/.env.example
+!**/.env.sample
+!**/.env.template
+!**/.env.defaults
+
+# direnv
+.envrc
+**/.envrc
+.direnv/
+**/.direnv/
+
+# Cloudflare local secrets.
+.dev.vars
+.dev.vars.*
+**/.dev.vars
+**/.dev.vars.*
+!.dev.vars.example
+!**/.dev.vars.example
+
+# Local-only settings conventions
+*.local.env
+*.local.ini
+*.local.toml
+*.local.yaml
+*.local.yml
+*.local.json
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+**/appsettings.local.json
+**/appsettings.*.local.json
+**/settings.local.json
+**/local.settings.json
+
+# Explicit secret/credential directories
+.secrets/
+**/.secrets/
+secrets.local/
+**/secrets.local/
+credentials.local/
+**/credentials.local/
+tokens.local/
+**/tokens.local/
+
+# Explicit local secret files
+secrets.local.*
+credentials.local.*
+tokens.local.*
+client-secret.local.*
+service-principal.local.*
+
+# Private keys / password-bearing certificate containers
+*.pfx
+*.p12
+*.p8
+*.p7b
+*.key
+*.pem
+*.jks
+*.keystore
+*.kdbx
+*.ovpn
+
+# SSH/private key conventions if accidentally copied into the repository
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.ppk
+
+# npm / Python publishing credentials
+.npmrc.local
+**/.npmrc.local
+.pypirc
+**/.pypirc
+
+# IMPORTANT:
+# Security-test fixtures used by RPA-125/RPA-149 must remain trackable even if
+# they deliberately resemble secrets. Put only synthetic/fake secrets here.
+!tests/fixtures/
+!tests/fixtures/**
+!tests/security-fixtures/
+!tests/security-fixtures/**
+
+
+# ==============================================================================
+# 4. POWER PLATFORM / PAC CLI / DATAVERSE LOCAL AUTH STATE
+# ==============================================================================
+
+# PAC auth profiles are workstation state and must never become repository state.
+# Current PAC normally stores profiles outside the repo, but these rules protect
+# against accidental copy/export into the working tree.
+.pac/
+**/.pac/
+.pac-cli/
+**/.pac-cli/
+.powerplatform/
+**/.powerplatform/
+.power-platform/
+**/.power-platform/
+.pp-tools/
+**/.pp-tools/
+AuthProfiles/
+**/AuthProfiles/
+authprofiles/
+**/authprofiles/
+pac-auth/
+**/pac-auth/
+pac-auth-cache/
+**/pac-auth-cache/
+
+# MSAL/PAC token cache names observed in Power Platform tooling ecosystems
+tokencache_msal*.dat
+**/tokencache_msal*.dat
+tokenCache*.dat
+**/tokenCache*.dat
+msalcache*.bin*
+**/msalcache*.bin*
+
+# Never commit generated/local connection/auth profile dumps
+*authprofile*.json
+*auth-profile*.json
+*authprofiles*.json
+*auth-profiles*.json
+*connectionprofile*.json
+*connection-profile*.json
+*.auth.local.json
+
+# Deployment settings may contain environment-specific connection bindings.
+# Track deliberate sanitized templates, ignore local resolved copies.
+**/deploymentSettings.local.json
+**/deployment-settings.local.json
+**/settings.deployment.local.json
+
+# Power Platform solution/package build outputs.
+# The unpacked source under power-platform/solutions/ IS intended to be tracked.
+power-platform/**/[Bb]in/
+power-platform/**/[Oo]bj/
+power-platform/**/[Oo]ut/
+power-platform/**/dist/
+power-platform/**/build/
+power-platform/**/*.zip
+power-platform/**/*.cab
+power-platform/**/*.nupkg
+
+# Temporary solution-checker / PAC output
+power-platform/**/.pac/
+power-platform/**/.checker/
+power-platform/**/checker-results.local/
+power-platform/**/solution-checker.local.*
+power-platform/**/temp/
+power-platform/**/tmp/
+
+
+# ==============================================================================
+# 5. .NET / VISUAL STUDIO / WPF / DATAVERSE PLUG-INS
+# ==============================================================================
+
+# Build output anywhere in the monorepo
+**/[Bb]in/
+**/[Oo]bj/
+**/[Dd]ebug/
+**/[Dd]ebugPublic/
+**/[Rr]elease/
+**/[Rr]eleases/
+**/[Xx]64/
+**/[Xx]86/
+**/[Aa][Rr][Mm]/
+**/[Aa][Rr][Mm]64/
+**/[Aa][Rr][Mm]64[Ee][Cc]/
+
+# MSBuild / generated intermediates
+*.obj
+*.iobj
+*.pdb
+*.ipdb
+*.pch
+*.ilk
+*.tlog
+*.lastbuildstate
+*.cachefile
+*.tmp_proj
+*_wpftmp.csproj
+Generated\ Files/
+Generated_Code/
+
+# Test / coverage output
+TestResults/
+**/TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+coverage*.info
+BenchmarkDotNet.Artifacts/
+
+# NuGet caches/packages/build artifacts
+**/[Pp]ackages/
+*.nupkg
+*.snupkg
+.nuget/
+**/.nuget/
+
+# Visual Studio profiler/traces
+*.psess
+*.vsp
+*.vspx
+*.sap
+*.e2e
+*.svclog
+
+# Publish/package output
+publish/
+**/publish/
+AppPackages/
+BundleArtifacts/
+*.appx
+*.appxbundle
+*.appxupload
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Local publish profiles may contain secrets
+*.pubxml
+*.publish.xml
+*.azurePubxml
+PublishScripts/
+
+# Do NOT ignore:
+#   *.sln
+#   *.csproj
+#   packages.lock.json
+#   Directory.Build.props / Directory.Build.targets
+# They are reproducibility/source files.
+
+
+# ==============================================================================
+# 6. PYTHON / UV / FASTAPI / OCR / PM4Py
+# ==============================================================================
+
+# Bytecode / compiled extensions
+__pycache__/
+**/__pycache__/
+*.py[codz]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+**/.venv/
+venv/
+**/venv/
+env/
+**/env/
+ENV/
+**/ENV/
+
+# Packaging/build
+.Python
+build/
+**/build/
+dist/
+**/dist/
+develop-eggs/
+eggs/
+.eggs/
+**/.eggs/
+*.egg-info/
+**/*.egg-info/
+.installed.cfg
+*.egg
+wheels/
+share/python-wheels/
+
+# Test / type-check / lint caches
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+.dmypy.json
+.pyre/
+**/.pyre/
+.pytype/
+**/.pytype/
+.ruff_cache/
+**/.ruff_cache/
+.hypothesis/
+**/.hypothesis/
+.tox/
+**/.tox/
+.nox/
+**/.nox/
+.pyright/
+**/.pyright/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+**/htmlcov/
+coverage/
+**/coverage/
+*.cover
+*.py.cover
+*.lcov
+
+# Jupyter/IPython if used during experimentation
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+profile_default/
+
+# Python installer/tool caches inside repo
+pip-wheel-metadata/
+pip-log.txt
+pip-delete-this-directory.txt
+.pdm-python
+.pdm-build/
+.pixi/
+**/.pixi/
+
+# Keep reproducibility locks:
+!uv.lock
+!**/uv.lock
+!pyproject.toml
+!**/pyproject.toml
+
+
+# ==============================================================================
+# 7. NODE.JS / PNPM / TYPESCRIPT / PCF / CLOUDFLARE WORKER
+# ==============================================================================
+
+# Dependencies
+node_modules/
+**/node_modules/
+.pnpm-store/
+**/.pnpm-store/
+
+# Package manager/debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Node runtime/process state
+pids/
+*.pid
+*.pid.lock
+*.seed
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# JS/TS caches and generated outputs
+.nyc_output/
+**/.nyc_output/
+.eslintcache
+**/.eslintcache
+.parcel-cache/
+**/.parcel-cache/
+.turbo/
+**/.turbo/
+.cache/
+**/.cache/
+.vite/
+**/.vite/
+.svelte-kit/
+**/.svelte-kit/
+.next/
+**/.next/
+.nuxt/
+**/.nuxt/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# PCF-generated/build output
+power-platform/pcf/**/out/
+power-platform/pcf/**/generated/
+power-platform/pcf/**/temp/
+power-platform/pcf/**/.pcf-cache/
+power-platform/pcf/**/*.pcfproj.user
+
+# Keep Node reproducibility/source files:
+!pnpm-lock.yaml
+!**/pnpm-lock.yaml
+!package.json
+!**/package.json
+!pnpm-workspace.yaml
+!**/pnpm-workspace.yaml
+
+
+# ==============================================================================
+# 8. CLOUDFLARE WRANGLER / D1 LOCAL DEVELOPMENT
+# ==============================================================================
+
+# Wrangler local binding state. This contains local D1/KV/R2/DO state.
+.wrangler/
+**/.wrangler/
+
+# Miniflare/local emulation state
+.mf/
+**/.mf/
+.miniflare/
+**/.miniflare/
+
+# Local Worker persistence if a custom path is used
+worker-local/
+**/worker-local/
+
+# Local D1 SQLite files are also caught by the DB section below.
+
+# Keep the Worker config and migrations:
+!wrangler.json
+!wrangler.jsonc
+!wrangler.toml
+!**/wrangler.json
+!**/wrangler.jsonc
+!**/wrangler.toml
+
+
+# ==============================================================================
+# 9. DATABASES / POSTGRESQL / SQLITE / LOCAL QUEUES
+# ==============================================================================
+
+# Runtime SQLite databases:
+# - LegacyPay simulator
+# - accidental local app DBs
+# - local D1 copies outside .wrangler
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# PostgreSQL local data directories / dumps
+pgdata/
+**/pgdata/
+postgres-data/
+**/postgres-data/
+*.dump
+*.backup
+*.sql.gz
+
+# Runtime queue/business state must not be committed
+services/bridge-api/data/
+services/bridge-api/runtime/
+services/bridge-api/state/
+services/bridge-api/.state/
+
+# If RPA-087 uses a repository-root data/ boundary
+/data/inbox/
+/data/processed/
+/data/quarantine/
+/data/tmp/
+/data/temp/
+/data/runtime/
+
+# n8n local persistent state / backups
+automation/n8n/data/
+automation/n8n/runtime/
+automation/n8n/backups/
+infra/n8n-data/
+infra/n8n_backups/
+n8n-data/
+n8n_backups/
+
+# Docker bind-mounted local runtime data
+infra/data/
+infra/volumes/
+infra/runtime/
+infra/.state/
+
+
+# ==============================================================================
+# 10. OCR / DOCUMENT INTELLIGENCE TRANSIENT FILES
+# ==============================================================================
+
+# Intermediate OCR render/preprocessing output
+services/docintel/tmp/
+services/docintel/temp/
+services/docintel/.tmp/
+services/docintel/cache/
+services/docintel/.cache/
+services/docintel/preprocessed/
+services/docintel/intermediate/
+services/docintel/runtime/
+services/docintel/output.local/
+
+# Local inbox processing states if colocated with docintel
+services/docintel/data/inbox/
+services/docintel/data/processed/
+services/docintel/data/quarantine/
+
+# Generated invoice-factory output should be reproducible.
+# Deliberately curated fixtures under tests/fixtures remain trackable.
+apps/invoice_factory/output/
+apps/invoice_factory/generated/
+apps/invoice_factory/.generated/
+apps/invoice_factory/tmp/
+apps/invoice_factory/temp/
+
+# Generic temporary PDFs/images generated during OCR experiments
+tests/generated/
+tests/output.local/
+tests/tmp/
+tests/temp/
+
+
+# ==============================================================================
+# 11. LEGACYPAY WPF SIMULATOR LOCAL STATE
+# ==============================================================================
+
+# RPA-021 explicitly stores runtime SQLite under apps/legacypay/data.
+apps/legacypay/data/
+apps/legacypay/runtime/
+apps/legacypay/logs/
+apps/legacypay/screenshots/
+apps/legacypay/crash-dumps/
+apps/legacypay/*.dmp
+
+# WER / crash artifacts
+*.dmp
+*.mdmp
+
+
+# ==============================================================================
+# 12. RPA RUNTIMES — PAD / UIPATH / AUTOMATION ANYWHERE / ROBOT FRAMEWORK
+# ==============================================================================
+
+# Common runtime logs/screenshots/results
+automation/**/logs/
+automation/**/log/
+automation/**/screenshots/
+automation/**/captures/
+automation/**/runtime/
+automation/**/temp/
+automation/**/tmp/
+automation/**/output.local/
+automation/**/results.local/
+
+# PAD local/export scratch
+automation/pad/.local/
+automation/pad/export.local/
+automation/pad/run-state/
+
+# UiPath local machine/runtime state.
+# DO NOT ignore project.json, *.xaml, ObjectRepository source, or project source.
+automation/uipath/.local/
+automation/uipath/.settings/
+automation/uipath/.cache/
+automation/uipath/.screenshots/
+automation/uipath/packages/
+automation/uipath/output/
+
+# Automation Anywhere local/export scratch
+automation/automation-anywhere/.local/
+automation/automation-anywhere/.cache/
+automation/automation-anywhere/output/
+
+# Robot Framework standard generated reports.
+# Source *.robot and reusable resource files remain tracked.
+**/output.xml
+**/log.html
+**/report.html
+**/selenium-screenshot-*.png
+**/browser-screenshot-*.png
+
+# Playwright / Browser library browser/runtime caches if created inside repo
+.playwright/
+**/.playwright/
+playwright-report/
+**/playwright-report/
+test-results/
+**/test-results/
+
+
+# ==============================================================================
+# 13. N8N SELF-HOSTED LOCAL STATE
+# ==============================================================================
+
+# If n8n exports sanitized workflow JSON into source-controlled folders, it should
+# remain tracked. Only local instance state/credentials/backups are ignored.
+automation/n8n/.n8n/
+automation/n8n/credentials/
+automation/n8n/executions/
+automation/n8n/binaryData/
+automation/n8n/.local/
+
+# Common default n8n user folder if accidentally located inside repo
+.n8n/
+**/.n8n/
+
+# Local backup archives can contain encrypted credentials and instance state
+*n8n*.backup
+*n8n*.backup.*
+*n8n*.dump
+*n8n*.dump.*
+
+
+# ==============================================================================
+# 14. DOCKER / COMPOSE / OBSERVABILITY LOCAL STATE
+# ==============================================================================
+
+# Compose override files intended only for one workstation
+compose.override.local.yml
+compose.override.local.yaml
+docker-compose.override.local.yml
+docker-compose.override.local.yaml
+
+# Grafana / Prometheus runtime data.
+# Provisioning JSON/YAML under infra/observability SHOULD remain tracked.
+infra/observability/data/
+infra/observability/runtime/
+infra/observability/prometheus-data/
+infra/observability/grafana-data/
+prometheus-data/
+grafana-data/
+
+# Local container logs
+infra/logs/
+*.container.log
+
+
+# ==============================================================================
+# 15. LOGS / TEMP / LOCAL DIAGNOSTICS
+# ==============================================================================
+
+# Generic logs (structured source/config files are unaffected)
+*.log
+*.log.*
+logs/
+**/logs/
+
+# Keep deliberate test fixture logs if needed
+!tests/fixtures/**/*.log
+
+# Local temporary directories
+tmp/
+**/tmp/
+temp/
+**/temp/
+.tmp/
+**/.tmp/
+
+# Local diagnostics
+diagnostics.local/
+**/diagnostics.local/
+debug.local/
+**/debug.local/
+
+# Core dumps
+core
+core.*
+*.core
+
+
+# ==============================================================================
+# 16. GENERATED REPORTS / BENCHMARKS / ANALYTICS
+# ==============================================================================
+
+# InvoiceOps uses generated reports as evidence. Do NOT blanket-ignore reports/.
+# Ignore only explicitly local/transient output locations.
+reports/local/
+reports/tmp/
+reports/.cache/
+artifacts/local/
+artifacts/tmp/
+artifacts/.cache/
+analytics/output.local/
+analytics/tmp/
+analytics/.cache/
+
+# PM4Py / matplotlib transient caches
+.matplotlib/
+**/.matplotlib/
+.cache/matplotlib/
+
+# Power BI:
+# Do NOT ignore *.pbix or *.pbit globally. The dashboard may be a deliberate
+# project/release artifact. Ignore only user-local backups/temporary copies.
+*.pbix.autosave
+*.pbix.tmp
+~$*.pbix
+~$*.pbit
+
+
+# ==============================================================================
+# 17. GITHUB ACTIONS / SELF-HOSTED RUNNER LOCAL STATE
+# ==============================================================================
+
+# If a GitHub Actions self-hosted runner is ever unpacked inside this repo,
+# none of its machine identity/work folders should be committed.
+.runner
+.runner_migrated
+.credentials
+.credentials_rsaparams
+.service
+_work/
+_diag/
+_tool/
+externals/
+actions-runner/
+**/actions-runner/
+
+# GitHub CLI local cache if copied into repo
+.github-cli/
+gh-cache/
+
+# IMPORTANT: .github/workflows/*.yml MUST remain tracked.
+
+
+# ==============================================================================
+# 18. SECURITY SCANNERS / QUALITY TOOLS
+# ==============================================================================
+
+# Gitleaks local reports/caches. The config/allowlist itself should be tracked.
+.gitleaks-cache/
+gitleaks-report.local.*
+gitleaks.local.*
+security-report.local.*
+audit-report.local.*
+
+# Dependency scanner caches/reports
+pip-audit-report.local.*
+pnpm-audit-report.local.*
+dotnet-audit-report.local.*
+
+# Solution checker machine-readable local output
+checker-report.local.*
+solution-checker-report.local.*
+
+
+# ==============================================================================
+# 19. BRUNO API CLIENT LOCAL/SECRET ENVIRONMENTS
+# ==============================================================================
+
+# Bruno collection source (*.bru) is useful and should be tracked.
+# Ignore only explicitly local/secret environments.
+*.local.bru
+*.secret.bru
+**/environments/local/
+**/environments/private/
+**/environments/secrets/
+
+
+# ==============================================================================
+# 20. ARCHIVES / BACKUPS / MANUAL EXPORT SCRATCH
+# ==============================================================================
+
+# Generic editor/manual backups
+*.old
+*.old.*
+*.backup.local
+*.bak.local
+
+# Local export scratch areas
+export.local/
+**/export.local/
+exports.local/
+**/exports.local/
+
+# Do not blanket-ignore *.zip:
+# a future release may intentionally attach packed solution artifacts.
+# Scope known transient Power Platform archives above instead.
+
+
+# ==============================================================================
+# 21. LARGE / LOCAL ML MODEL STATE
+# ==============================================================================
+
+# Ollama model storage should never live in the repo, but protect against an
+# accidentally redirected model directory.
+.ollama/
+**/.ollama/
+ollama-models/
+**/ollama-models/
+
+# Common local model formats if accidentally copied into a local model cache.
+# Deliberately tracked tiny test fixtures can be force-added if ever needed.
+*.gguf
+*.ggml
+*.safetensors
+
+
+# ==============================================================================
+# 22. FIRST-COMMIT STRUCTURE PLACEHOLDERS
+# ==============================================================================
+
+# .gitkeep files are intentionally NOT ignored. They may be used to make Git track
+# the otherwise-empty RPA-007 directory skeleton.
+#
+# Keep:
+#   apps/.gitkeep
+#   services/.gitkeep
+#   automation/.gitkeep
+#   power-platform/.gitkeep
+#   infra/.gitkeep
+#   tests/.gitkeep
+#   scripts/.gitkeep
+
+
+# ==============================================================================
+# 23. EXPLICITLY KEEP REPRODUCIBILITY / SOURCE-OF-TRUTH FILES
+# ==============================================================================
+
+# RPA-008 — generated toolchain lock is project evidence and should be committed.
+!toolchain.lock.json
+
+# Python / uv lockfiles
+!uv.lock
+!**/uv.lock
+
+# Node / pnpm lockfiles
+!pnpm-lock.yaml
+!**/pnpm-lock.yaml
+
+# Compose / infra source
+!infra/compose.yaml
+!infra/compose.yml
+
+# Cloudflare Worker config/source
+!services/edge-worker/wrangler.json
+!services/edge-worker/wrangler.jsonc
+!services/edge-worker/wrangler.toml
+!services/edge-worker/openapi.json
+
+# GitHub Actions source
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+!.github/workflows/*.yaml
+
+# Power Platform deterministic scripts/source
+!scripts/powerplatform/
+!scripts/powerplatform/*.ps1
+
+# Security test fixture boundary: synthetic secrets are intentionally trackable.
+!tests/fixtures/
+!tests/fixtures/**
+!tests/security-fixtures/
+!tests/security-fixtures/**
+
+
+# ==============================================================================
+# END
+# ==============================================================================
