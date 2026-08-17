@@ -1,8 +1,8 @@
 {
   "schemaVersion": 4,
   "project": "invoiceops-lab",
-  "generatedAtUtc": "2026-08-17T20:15:01.600Z",
-  "inventorySha256": "95fa64d2f99c06f788df8fff62223e309b2ef3c104c29a66180c932df08e8597",
+  "generatedAtUtc": "2026-08-17T21:44:25.404Z",
+  "inventorySha256": "bb4ef377b39c01949c2c0ac347c723ad228c7d7ad2386098bfb43d816d968026",
   "policy": {
     "missingToolIsFatal": false,
     "missingToolEncoding": "installed=false; version=null"
@@ -27,23 +27,17 @@
   "status": {
     "core": {
       "expectedCount": 7,
-      "detectedCount": 5,
-      "missingOrUnusableCount": 2,
-      "missingOrUnusableTools": [
-        "pac",
-        "powerAutomateDesktop"
-      ],
-      "complete": false
+      "detectedCount": 7,
+      "missingOrUnusableCount": 0,
+      "missingOrUnusableTools": [],
+      "complete": true
     },
     "evergreenVendorClients": {
       "expectedCount": 4,
-      "detectedCount": 0,
-      "missingOrUnusableCount": 4,
+      "detectedCount": 3,
+      "missingOrUnusableCount": 1,
       "missingOrUnusableTools": [
-        "powerPlatformCli",
-        "powerAutomateDesktop",
-        "uiPath",
-        "automationAnywhere"
+        "uiPath"
       ],
       "complete": false
     }
@@ -94,12 +88,13 @@
       "message": null
     },
     "pac": {
-      "installed": false,
-      "status": "missing",
-      "version": null,
-      "source": "not-detected",
-      "path": "",
-      "message": "'pac' was not found in Windows PATH."
+      "installed": true,
+      "status": "detected",
+      "version": "2.11.2+g47bc199",
+      "source": "windows-path",
+      "path": "%USERPROFILE%\\.dotnet\\tools\\pac.exe",
+      "message": null,
+      "versionMethod": "pac"
     },
     "docker": {
       "installed": true,
@@ -112,30 +107,37 @@
       "composeVersion": "5.4.0"
     },
     "powerAutomateDesktop": {
-      "installed": false,
-      "status": "missing",
-      "version": null,
-      "source": "not-detected",
-      "path": "",
-      "message": "Power Automate for desktop was not detected as MSI or Microsoft Store/MSIX."
+      "installed": true,
+      "status": "detected",
+      "version": "2.70.00187.26189",
+      "source": "msi",
+      "path": "C:\\Program Files (x86)\\Power Automate Desktop\\dotnet\\PAD.Console.Host.exe",
+      "message": null,
+      "installType": "msi",
+      "displayName": "Power Automate for desktop",
+      "packageName": null
     }
   },
   "evergreenVendorClients": {
     "powerPlatformCli": {
-      "installed": false,
-      "status": "missing",
-      "version": null,
-      "source": "not-detected",
-      "path": "",
-      "message": "'pac' was not found in Windows PATH."
+      "installed": true,
+      "status": "detected",
+      "version": "2.11.2+g47bc199",
+      "source": "windows-path",
+      "path": "%USERPROFILE%\\.dotnet\\tools\\pac.exe",
+      "message": null,
+      "versionMethod": "pac"
     },
     "powerAutomateDesktop": {
-      "installed": false,
-      "status": "missing",
-      "version": null,
-      "source": "not-detected",
-      "path": "",
-      "message": "Power Automate for desktop was not detected as MSI or Microsoft Store/MSIX."
+      "installed": true,
+      "status": "detected",
+      "version": "2.70.00187.26189",
+      "source": "msi",
+      "path": "C:\\Program Files (x86)\\Power Automate Desktop\\dotnet\\PAD.Console.Host.exe",
+      "message": null,
+      "installType": "msi",
+      "displayName": "Power Automate for desktop",
+      "packageName": null
     },
     "uiPath": {
       "installed": false,
@@ -157,13 +159,16 @@
       }
     },
     "automationAnywhere": {
-      "installed": false,
-      "status": "missing",
-      "version": null,
-      "source": "not-detected",
-      "path": "",
-      "message": "Automation Anywhere Bot Agent was not detected. This is valid before the Automation Anywhere lab is configured.",
-      "inventoryComplete": false
+      "installed": true,
+      "status": "detected",
+      "version": "23.0.32",
+      "source": "windows-installation",
+      "path": "C:\\Program Files\\Automation Anywhere\\Bot Agent",
+      "message": null,
+      "displayName": "Automation Anywhere Bot Agent",
+      "versionMethod": "Windows uninstall registry",
+      "versionExecutable": "C:\\Program Files\\Automation Anywhere\\Bot Agent\\AADiagnosticUtility.exe",
+      "inventoryComplete": true
     }
   },
   "supplemental": {
