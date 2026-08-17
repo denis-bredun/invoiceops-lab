@@ -1,8 +1,8 @@
 {
   "schemaVersion": 4,
   "project": "invoiceops-lab",
-  "generatedAtUtc": "2026-08-17T21:44:25.404Z",
-  "inventorySha256": "bb4ef377b39c01949c2c0ac347c723ad228c7d7ad2386098bfb43d816d968026",
+  "generatedAtUtc": "2026-08-17T22:18:21.941Z",
+  "inventorySha256": "76571ddb821c737c8acf1e615f75ef6357598d5897c383de73cf50c387a41c17",
   "policy": {
     "missingToolIsFatal": false,
     "missingToolEncoding": "installed=false; version=null"
@@ -34,12 +34,10 @@
     },
     "evergreenVendorClients": {
       "expectedCount": 4,
-      "detectedCount": 3,
-      "missingOrUnusableCount": 1,
-      "missingOrUnusableTools": [
-        "uiPath"
-      ],
-      "complete": false
+      "detectedCount": 4,
+      "missingOrUnusableCount": 0,
+      "missingOrUnusableTools": [],
+      "complete": true
     }
   },
   "host": {
@@ -103,8 +101,8 @@
       "source": "windows-path",
       "path": "%LOCALAPPDATA%\\Programs\\DockerDesktop\\resources\\bin\\docker.exe",
       "message": null,
-      "distribution": null,
-      "composeVersion": "5.4.0"
+      "composeVersion": "5.4.0",
+      "distribution": null
     },
     "powerAutomateDesktop": {
       "installed": true,
@@ -114,8 +112,8 @@
       "path": "C:\\Program Files (x86)\\Power Automate Desktop\\dotnet\\PAD.Console.Host.exe",
       "message": null,
       "installType": "msi",
-      "displayName": "Power Automate for desktop",
-      "packageName": null
+      "packageName": null,
+      "displayName": "Power Automate for desktop"
     }
   },
   "evergreenVendorClients": {
@@ -136,26 +134,47 @@
       "path": "C:\\Program Files (x86)\\Power Automate Desktop\\dotnet\\PAD.Console.Host.exe",
       "message": null,
       "installType": "msi",
-      "displayName": "Power Automate for desktop",
-      "packageName": null
+      "packageName": null,
+      "displayName": "Power Automate for desktop"
     },
     "uiPath": {
-      "installed": false,
-      "inventoryComplete": false,
-      "status": "missing",
-      "version": null,
-      "source": "not-detected",
-      "path": null,
-      "message": "UiPath Studio/Assistant was not detected.",
+      "installed": true,
+      "inventoryComplete": true,
+      "status": "detected",
+      "version": "26.0.199-cloud.24445",
+      "source": "uipath-platform-installer",
+      "path": "C:\\Program Files\\UiPathPlatform\\Studio\\26.0.199-cloud.24445\\UiPath.Studio.exe",
+      "message": null,
       "studio": {
-        "installed": false,
-        "version": null,
-        "path": null
+        "installed": true,
+        "version": "26.0.199-cloud.24445",
+        "path": "C:\\Program Files\\UiPathPlatform\\Studio\\26.0.199-cloud.24445\\UiPath.Studio.exe",
+        "versionMethod": "UiPathPlatform versioned install directory",
+        "discoverySource": "Windows Start Menu shortcut",
+        "candidateCount": 2
       },
       "assistant": {
-        "installed": false,
-        "version": null,
-        "path": null
+        "installed": true,
+        "version": "26.0.199-cloud.24445",
+        "path": "C:\\Program Files\\UiPathPlatform\\Robot\\26.0.199-cloud.24445\\UiPathAssistant\\UiPath.Assistant.exe",
+        "versionMethod": "UiPathPlatform versioned install directory",
+        "discoverySource": "Windows Start Menu shortcut",
+        "candidateCount": 1
+      },
+      "robot": {
+        "installed": true,
+        "version": "26.0.199-cloud.24445",
+        "path": "C:\\Program Files\\UiPathPlatform\\Robot\\26.0.199-cloud.24445\\UiRobot.exe"
+      },
+      "updater": {
+        "installed": true,
+        "version": "24.4.0-dev",
+        "path": "C:\\Program Files\\UiPathPlatform\\Updater\\UiPath.Connected.Updater.App.exe"
+      },
+      "detection": {
+        "registryEntryCount": 1,
+        "searchRootCount": 7,
+        "executableCount": 5
       }
     },
     "automationAnywhere": {
@@ -165,9 +184,9 @@
       "source": "windows-installation",
       "path": "C:\\Program Files\\Automation Anywhere\\Bot Agent",
       "message": null,
-      "displayName": "Automation Anywhere Bot Agent",
-      "versionMethod": "Windows uninstall registry",
       "versionExecutable": "C:\\Program Files\\Automation Anywhere\\Bot Agent\\AADiagnosticUtility.exe",
+      "versionMethod": "Windows uninstall registry",
+      "displayName": "Automation Anywhere Bot Agent",
       "inventoryComplete": true
     }
   },
