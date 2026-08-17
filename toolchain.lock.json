@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 4,
+  "project": "invoiceops-lab",
+  "generatedAtUtc": "2026-08-17T20:15:01.600Z",
+  "inventorySha256": "95fa64d2f99c06f788df8fff62223e309b2ef3c104c29a66180c932df08e8597",
+  "policy": {
+    "missingToolIsFatal": false,
+    "missingToolEncoding": "installed=false; version=null"
+  },
+  "coverage": {
+    "coreTools": [
+      "git",
+      "dotnet",
+      "python",
+      "node",
+      "pac",
+      "docker",
+      "powerAutomateDesktop"
+    ],
+    "evergreenVendorClients": [
+      "powerPlatformCli",
+      "powerAutomateDesktop",
+      "uiPath",
+      "automationAnywhere"
+    ]
+  },
+  "status": {
+    "core": {
+      "expectedCount": 7,
+      "detectedCount": 5,
+      "missingOrUnusableCount": 2,
+      "missingOrUnusableTools": [
+        "pac",
+        "powerAutomateDesktop"
+      ],
+      "complete": false
+    },
+    "evergreenVendorClients": {
+      "expectedCount": 4,
+      "detectedCount": 0,
+      "missingOrUnusableCount": 4,
+      "missingOrUnusableTools": [
+        "powerPlatformCli",
+        "powerAutomateDesktop",
+        "uiPath",
+        "automationAnywhere"
+      ],
+      "complete": false
+    }
+  },
+  "host": {
+    "operatingSystem": "Майкрософт Windows 10 Home",
+    "osVersion": "10.0.19045",
+    "architecture": "X64",
+    "powerShell": {
+      "installed": true,
+      "status": "detected",
+      "version": "7.6.3",
+      "edition": "Core",
+      "path": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+    }
+  },
+  "tools": {
+    "git": {
+      "installed": true,
+      "status": "detected",
+      "version": "2.55.0.windows.4",
+      "source": "windows-path",
+      "path": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "message": null
+    },
+    "dotnet": {
+      "installed": true,
+      "status": "detected",
+      "version": "10.0.400",
+      "source": "windows-path",
+      "path": "C:\\Program Files\\dotnet\\dotnet.exe",
+      "message": null
+    },
+    "python": {
+      "installed": true,
+      "status": "detected",
+      "version": "3.14.7",
+      "source": "windows-path",
+      "path": "C:\\Python314\\python.exe",
+      "message": null
+    },
+    "node": {
+      "installed": true,
+      "status": "detected",
+      "version": "24.19.0",
+      "source": "windows-path",
+      "path": "C:\\Program Files\\nodejs\\node.exe",
+      "message": null
+    },
+    "pac": {
+      "installed": false,
+      "status": "missing",
+      "version": null,
+      "source": "not-detected",
+      "path": "",
+      "message": "'pac' was not found in Windows PATH."
+    },
+    "docker": {
+      "installed": true,
+      "status": "detected",
+      "version": "29.7.2",
+      "source": "windows-path",
+      "path": "%LOCALAPPDATA%\\Programs\\DockerDesktop\\resources\\bin\\docker.exe",
+      "message": null,
+      "distribution": null,
+      "composeVersion": "5.4.0"
+    },
+    "powerAutomateDesktop": {
+      "installed": false,
+      "status": "missing",
+      "version": null,
+      "source": "not-detected",
+      "path": "",
+      "message": "Power Automate for desktop was not detected as MSI or Microsoft Store/MSIX."
+    }
+  },
+  "evergreenVendorClients": {
+    "powerPlatformCli": {
+      "installed": false,
+      "status": "missing",
+      "version": null,
+      "source": "not-detected",
+      "path": "",
+      "message": "'pac' was not found in Windows PATH."
+    },
+    "powerAutomateDesktop": {
+      "installed": false,
+      "status": "missing",
+      "version": null,
+      "source": "not-detected",
+      "path": "",
+      "message": "Power Automate for desktop was not detected as MSI or Microsoft Store/MSIX."
+    },
+    "uiPath": {
+      "installed": false,
+      "inventoryComplete": false,
+      "status": "missing",
+      "version": null,
+      "source": "not-detected",
+      "path": null,
+      "message": "UiPath Studio/Assistant was not detected.",
+      "studio": {
+        "installed": false,
+        "version": null,
+        "path": null
+      },
+      "assistant": {
+        "installed": false,
+        "version": null,
+        "path": null
+      }
+    },
+    "automationAnywhere": {
+      "installed": false,
+      "status": "missing",
+      "version": null,
+      "source": "not-detected",
+      "path": "",
+      "message": "Automation Anywhere Bot Agent was not detected. This is valid before the Automation Anywhere lab is configured.",
+      "inventoryComplete": false
+    }
+  },
+  "supplemental": {
+    "wsl": {
+      "installed": true,
+      "status": "detected",
+      "version": "2.7.11.0",
+      "path": "C:\\Windows\\system32\\wsl.exe",
+      "distributions": [
+        "Ubuntu-24.04",
+        "docker-desktop",
+        "podman-dz-internal-0.10.0"
+      ],
+      "preferredDistro": "Ubuntu-24.04",
+      "statusCommandPassed": true,
+      "message": null
+    },
+    "uv": {
+      "installed": true,
+      "status": "detected",
+      "version": "0.12.5",
+      "source": "windows-path",
+      "path": "%USERPROFILE%\\.local\\bin\\uv.exe",
+      "message": null
+    },
+    "pnpm": {
+      "installed": true,
+      "status": "detected",
+      "version": "11.22.0",
+      "source": "windows-path",
+      "path": "%APPDATA%\\npm\\pnpm.ps1",
+      "message": null
+    },
+    "dockerCompose": {
+      "installed": true,
+      "status": "detected",
+      "version": "5.4.0",
+      "source": "windows-path"
+    }
+  }
+}
