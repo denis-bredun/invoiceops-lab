@@ -1089,118 +1089,951 @@ function Get-PadInventory {
 # 10. UIPATH STUDIO + ASSISTANT
 # ==============================================================================
 
-function Get-UiPathInventory {
-    $registryEntries = @(
-        Get-UninstallEntries `
-            -DisplayNamePattern '(?i)^UiPath( Studio.*|Studio.*)$'
+function Get-UiPathVersionFromPath {
+    param(
+        [AllowNull()]
+        [string]$Path
     )
 
-    $studioDirectories = [System.Collections.Generic.List[string]]::new()
-
-    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
-        $studioDirectories.Add(
-            (Join-Path $env:ProgramFiles 'UiPath\Studio')
-        )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
     }
 
-    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
-        $studioDirectories.Add(
-            (Join-Path ${env:ProgramFiles(x86)} 'UiPath\Studio')
-        )
+    # Connected UiPath Platform Installer clients are placed below a versioned
+    # directory. A real Community example is:
+    #   ...\UiPathPlatform\Studio\26.0.199-cloud.24445\UiPath.Studio.exe
+    #
+    # Search only path segments after "UiPathPlatform" so unrelated numeric
+    # folders elsewhere in a custom path cannot be mistaken for a client build.
+    $segments = @(
+        $Path -split '[\\/]+' |
+        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    )
+
+    if ($segments.Count -eq 0) {
+        return $null
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-        $studioDirectories.Add(
-            (Join-Path $env:LOCALAPPDATA 'Programs\UiPath\Studio')
-        )
-    }
+    $platformIndex = -1
 
-    $studioExecutable = $null
-    $commandLineExecutable = $null
-    $assistantExecutable = $null
-
-    foreach ($directory in $studioDirectories) {
-        $studioCandidate = Join-Path $directory 'UiPath.Studio.exe'
-        $cliCandidate = Join-Path $directory 'UiPath.Studio.CommandLine.exe'
-        $assistantCandidate = Join-Path $directory 'UiPathAssistant\UiPath.Assistant.exe'
-
-        if (-not $studioExecutable -and (Test-Path -LiteralPath $studioCandidate -PathType Leaf)) {
-            $studioExecutable = $studioCandidate
-        }
-
-        if (-not $commandLineExecutable -and (Test-Path -LiteralPath $cliCandidate -PathType Leaf)) {
-            $commandLineExecutable = $cliCandidate
-        }
-
-        if (-not $assistantExecutable -and (Test-Path -LiteralPath $assistantCandidate -PathType Leaf)) {
-            $assistantExecutable = $assistantCandidate
-        }
-    }
-
-    $registryVersion = $null
-    $registryDisplayName = $null
-
-    if ($registryEntries.Count -gt 0) {
-        $entry = $registryEntries |
-            Sort-Object -Property DisplayVersion -Descending |
-            Select-Object -First 1
-
-        $displayNameProperty = $entry.PSObject.Properties['DisplayName']
-        if ($null -ne $displayNameProperty) {
-            $registryDisplayName = [string]$displayNameProperty.Value
-        }
-
-        $displayVersionProperty = $entry.PSObject.Properties['DisplayVersion']
+    for ($i = 0; $i -lt $segments.Count; $i++) {
         if (
-            $null -ne $displayVersionProperty -and
-            -not [string]::IsNullOrWhiteSpace([string]$displayVersionProperty.Value)
+            [string]::Equals(
+                [string]$segments[$i],
+                'UiPathPlatform',
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
         ) {
-            $registryVersion = [string]$displayVersionProperty.Value
+            $platformIndex = $i
+            break
         }
     }
 
-    $studioVersion = $null
-    $versionMethod = $null
+    if ($platformIndex -lt 0) {
+        return $null
+    }
 
-    if ($commandLineExecutable) {
-        $probe = Invoke-NativeCapture `
-            -FilePath $commandLineExecutable `
-            -Arguments @('--version')
+    $versionPattern = '^(?<version>\d+(?:\.\d+){1,5}(?:[-+._][0-9A-Za-z][0-9A-Za-z._-]*)?)$'
 
-        if ($probe.success) {
-            $studioVersion = Get-VersionToken -Text $probe.output
-            if ($studioVersion) {
-                $versionMethod = 'UiPath.Studio.CommandLine.exe --version'
+    for ($i = $platformIndex + 1; $i -lt $segments.Count; $i++) {
+        $segment = [string]$segments[$i]
+        $match = [regex]::Match(
+            $segment,
+            $versionPattern,
+            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+        )
+
+        if ($match.Success) {
+            return [string]$match.Groups['version'].Value
+        }
+    }
+
+    return $null
+}
+
+function Get-UiPathExecutableVersionEvidence {
+    param(
+        [AllowNull()]
+        [string]$Path
+    )
+
+    $evidence = @()
+
+    if (
+        [string]::IsNullOrWhiteSpace($Path) -or
+        -not (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction SilentlyContinue)
+    ) {
+        return @()
+    }
+
+    $pathVersion = Get-UiPathVersionFromPath -Path $Path
+
+    if (-not [string]::IsNullOrWhiteSpace($pathVersion)) {
+        $evidence += [pscustomobject]@{
+            version  = $pathVersion
+            method   = 'UiPathPlatform versioned install directory'
+            priority = 500
+        }
+    }
+
+    try {
+        $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+
+        foreach ($candidate in @(
+            [pscustomobject]@{
+                value    = [string]$versionInfo.ProductVersion
+                method   = 'executable ProductVersion metadata'
+                priority = 400
+            },
+            [pscustomobject]@{
+                value    = [string]$versionInfo.FileVersion
+                method   = 'executable FileVersion metadata'
+                priority = 350
+            }
+        )) {
+            if ([string]::IsNullOrWhiteSpace($candidate.value)) {
+                continue
+            }
+
+            $parsedVersion = Get-VersionToken -Text $candidate.value
+
+            if ([string]::IsNullOrWhiteSpace($parsedVersion)) {
+                $parsedVersion = $candidate.value.Trim()
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($parsedVersion)) {
+                $evidence += [pscustomobject]@{
+                    version  = $parsedVersion
+                    method   = $candidate.method
+                    priority = $candidate.priority
+                }
+            }
+        }
+    }
+    catch {
+        Write-Verbose "UiPath file metadata probe failed for '$Path': $($_.Exception.Message)"
+    }
+
+    # Some UiPath executables are managed assemblies while launchers can be
+    # native. AssemblyName is therefore a useful additional probe but is never
+    # required for detection.
+    try {
+        $assemblyName = [System.Reflection.AssemblyName]::GetAssemblyName($Path)
+
+        if ($null -ne $assemblyName -and $null -ne $assemblyName.Version) {
+            $assemblyVersion = [string]$assemblyName.Version
+
+            if (-not [string]::IsNullOrWhiteSpace($assemblyVersion)) {
+                $evidence += [pscustomobject]@{
+                    version  = $assemblyVersion
+                    method   = '.NET assembly version metadata'
+                    priority = 250
+                }
+            }
+        }
+    }
+    catch {
+        # Native executable or non-managed launcher. This is expected for some
+        # UiPath binaries and must never make the inventory fail.
+    }
+
+    # Deduplicate identical version/method pairs without assuming that the
+    # highest-looking semantic version is necessarily the active channel build.
+    $deduped = @(
+        $evidence |
+        Group-Object -Property version, method |
+        ForEach-Object {
+            $_.Group |
+                Sort-Object -Property priority -Descending |
+                Select-Object -First 1
+        }
+    )
+
+    return @($deduped)
+}
+
+function Get-UiPathRegistryEntriesDeep {
+    $results = @()
+
+    foreach ($registryPath in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )) {
+        try {
+            foreach ($entry in @(
+                Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $displayNameProperty = $_.PSObject.Properties['DisplayName']
+
+                    $null -ne $displayNameProperty -and
+                    -not [string]::IsNullOrWhiteSpace(
+                        [string]$displayNameProperty.Value
+                    ) -and
+                    [string]$displayNameProperty.Value -match '(?i)UiPath'
+                }
+            )) {
+                $results += $entry
+            }
+        }
+        catch {
+            Write-Verbose "UiPath uninstall-registry probe failed at '$registryPath': $($_.Exception.Message)"
+        }
+    }
+
+    return @($results)
+}
+
+function Get-UiPathAppPathTargets {
+    $targets = @()
+
+    foreach ($executableName in @(
+        'UiPath.Studio.exe',
+        'UiPath.Studio.CommandLine.exe',
+        'UiPath.Assistant.exe',
+        'UiRobot.exe'
+    )) {
+        foreach ($registryPath in @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$executableName",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\$executableName",
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$executableName"
+        )) {
+            try {
+                $key = Get-Item -LiteralPath $registryPath -ErrorAction Stop
+                $target = [string]$key.GetValue('')
+
+                if (
+                    -not [string]::IsNullOrWhiteSpace($target) -and
+                    (Test-Path -LiteralPath $target -PathType Leaf)
+                ) {
+                    $targets += [pscustomobject]@{
+                        path   = [System.IO.Path]::GetFullPath($target)
+                        source = 'Windows App Paths registry'
+                    }
+                }
+            }
+            catch {
+                # Missing App Paths keys are normal.
             }
         }
     }
 
-    if (-not $studioVersion -and $studioExecutable) {
-        $studioVersion = Get-FileVersion -Path $studioExecutable
-        if ($studioVersion) {
-            $versionMethod = 'UiPath.Studio.exe metadata'
+    return @($targets)
+}
+
+function Get-UiPathShortcutTargets {
+    $targets = @()
+    $shortcutRoots = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        $shortcutRoots += Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) {
+        $shortcutRoots += Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+    }
+
+    $existingRoots = @(
+        $shortcutRoots |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Container -ErrorAction SilentlyContinue }
+    )
+
+    if ($existingRoots.Count -eq 0) {
+        return @()
+    }
+
+    $shell = $null
+
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+
+        foreach ($root in $existingRoots) {
+            foreach ($shortcutFile in @(
+                Get-ChildItem `
+                    -LiteralPath $root `
+                    -Filter '*.lnk' `
+                    -File `
+                    -Recurse `
+                    -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '(?i)UiPath' }
+            )) {
+                try {
+                    $shortcut = $shell.CreateShortcut($shortcutFile.FullName)
+                    $target = [string]$shortcut.TargetPath
+
+                    if (
+                        -not [string]::IsNullOrWhiteSpace($target) -and
+                        (Test-Path -LiteralPath $target -PathType Leaf)
+                    ) {
+                        $targets += [pscustomobject]@{
+                            path   = [System.IO.Path]::GetFullPath($target)
+                            source = 'Windows Start Menu shortcut'
+                        }
+                    }
+                }
+                catch {
+                    Write-Verbose "UiPath shortcut resolution failed for '$($shortcutFile.FullName)': $($_.Exception.Message)"
+                }
+            }
+        }
+    }
+    catch {
+        Write-Verbose "UiPath Start Menu shortcut probe unavailable: $($_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $shell) {
+            try {
+                [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+            }
+            catch {
+                # Best-effort COM cleanup only.
+            }
         }
     }
 
-    if (-not $studioVersion -and $registryVersion) {
-        $studioVersion = $registryVersion
-        $versionMethod = 'Windows uninstall registry'
+    return @($targets)
+}
+
+function Get-UiPathRunningProcessTargets {
+    $targets = @()
+
+    foreach ($processName in @(
+        'UiPath.Studio',
+        'UiPath.Assistant',
+        'UiRobot',
+        'UiPath.Executor'
+    )) {
+        try {
+            foreach ($process in @(Get-Process -Name $processName -ErrorAction SilentlyContinue)) {
+                try {
+                    $target = [string]$process.Path
+
+                    if (
+                        -not [string]::IsNullOrWhiteSpace($target) -and
+                        (Test-Path -LiteralPath $target -PathType Leaf)
+                    ) {
+                        $targets += [pscustomobject]@{
+                            path   = [System.IO.Path]::GetFullPath($target)
+                            source = 'running process executable path'
+                        }
+                    }
+                }
+                catch {
+                    # Process path can be inaccessible depending on permissions.
+                }
+            }
+        }
+        catch {
+            # Process not running or inaccessible. Neither is an inventory error.
+        }
+    }
+
+    return @($targets)
+}
+
+function Get-UiPathCandidateRole {
+    param(
+        [AllowNull()]
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+
+    switch -Regex ([System.IO.Path]::GetFileName($Path)) {
+        '^UiPath\.Studio\.exe$'             { return 'studio' }
+        '^UiPath\.Studio\.CommandLine\.exe$' { return 'studioCommandLine' }
+        '^UiPath\.Assistant\.exe$'          { return 'assistant' }
+        '^UiRobot\.exe$'                     { return 'robot' }
+        '^UiPath\.Connected\.Updater\.App\.exe$' { return 'updater' }
+        default                              { return $null }
+    }
+}
+
+function New-UiPathExecutableCandidate {
+    param(
+        [AllowNull()]
+        [string]$Path,
+
+        [AllowNull()]
+        [string]$DiscoverySource
+    )
+
+    if (
+        [string]::IsNullOrWhiteSpace($Path) -or
+        -not (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction SilentlyContinue)
+    ) {
+        return $null
+    }
+
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($Path)
+        $fileInfo = Get-Item -LiteralPath $fullPath -ErrorAction Stop
+        $role = Get-UiPathCandidateRole -Path $fullPath
+
+        if ([string]::IsNullOrWhiteSpace($role)) {
+            return $null
+        }
+
+        $versionEvidence = @(Get-UiPathExecutableVersionEvidence -Path $fullPath)
+        $bestVersionEvidence = $null
+
+        if ($versionEvidence.Count -gt 0) {
+            $bestVersionEvidence = $versionEvidence |
+                Sort-Object -Property priority -Descending |
+                Select-Object -First 1
+        }
+
+        return [pscustomobject]@{
+            role             = $role
+            path             = $fullPath
+            discoverySource  = $DiscoverySource
+            pathVersion      = Get-UiPathVersionFromPath -Path $fullPath
+            version          = if ($null -ne $bestVersionEvidence) {
+                [string]$bestVersionEvidence.version
+            }
+            else {
+                $null
+            }
+            versionMethod    = if ($null -ne $bestVersionEvidence) {
+                [string]$bestVersionEvidence.method
+            }
+            else {
+                $null
+            }
+            versionEvidence  = @($versionEvidence)
+            lastWriteTimeUtc = $fileInfo.LastWriteTimeUtc
+        }
+    }
+    catch {
+        Write-Verbose "Unable to build UiPath executable candidate for '$Path': $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Select-BestUiPathExecutableCandidate {
+    param(
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$Candidates = @(),
+
+        [AllowNull()]
+        [string[]]$PreferredRoles = @()
+    )
+
+    $safeCandidates = @(
+        $Candidates |
+        Where-Object { $null -ne $_ }
+    )
+
+    if ($safeCandidates.Count -eq 0) {
+        return $null
+    }
+
+    $ranked = @(
+        foreach ($candidate in $safeCandidates) {
+            $rolePriority = 0
+
+            for ($i = 0; $i -lt $PreferredRoles.Count; $i++) {
+                if (
+                    [string]::Equals(
+                        [string]$candidate.role,
+                        [string]$PreferredRoles[$i],
+                        [System.StringComparison]::OrdinalIgnoreCase
+                    )
+                ) {
+                    $rolePriority = 1000 - ($i * 100)
+                    break
+                }
+            }
+
+            $versionPriority = 0
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$candidate.pathVersion)) {
+                $versionPriority += 500
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$candidate.version)) {
+                $versionPriority += 250
+            }
+
+            $platformPriority = 0
+
+            if ([string]$candidate.path -match '(?i)[\\/]UiPathPlatform[\\/]') {
+                $platformPriority = 200
+            }
+
+            [pscustomobject]@{
+                candidate         = $candidate
+                rolePriority      = $rolePriority
+                versionPriority   = $versionPriority
+                platformPriority  = $platformPriority
+                lastWriteTimeUtc  = $candidate.lastWriteTimeUtc
+            }
+        }
+    )
+
+    $selection = $ranked |
+        Sort-Object `
+            @{ Expression = 'rolePriority'; Descending = $true },
+            @{ Expression = 'versionPriority'; Descending = $true },
+            @{ Expression = 'platformPriority'; Descending = $true },
+            @{ Expression = 'lastWriteTimeUtc'; Descending = $true } |
+        Select-Object -First 1
+
+    if ($null -eq $selection) {
+        return $null
+    }
+
+    return $selection.candidate
+}
+
+function Get-UiPathRegistryVersionFallback {
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$RegistryEntries = @(),
+
+        [ValidateSet('studio', 'assistant', 'platform')]
+        [string]$Role
+    )
+
+    $namePattern = switch ($Role) {
+        'studio'    { '(?i)UiPath.*Studio|Studio.*UiPath' }
+        'assistant' { '(?i)UiPath.*Assistant|Assistant.*UiPath' }
+        'platform'  { '(?i)^UiPath\s+Platform(?:\s.*)?$|UiPath.*Platform.*Installer' }
+    }
+
+    $matches = @(
+        $RegistryEntries |
+        Where-Object {
+            $displayNameProperty = $_.PSObject.Properties['DisplayName']
+            $displayVersionProperty = $_.PSObject.Properties['DisplayVersion']
+
+            $null -ne $displayNameProperty -and
+            [string]$displayNameProperty.Value -match $namePattern -and
+            $null -ne $displayVersionProperty -and
+            -not [string]::IsNullOrWhiteSpace(
+                [string]$displayVersionProperty.Value
+            )
+        }
+    )
+
+    if ($matches.Count -eq 0) {
+        return $null
+    }
+
+    $entry = $matches | Select-Object -First 1
+    $displayName = [string]$entry.PSObject.Properties['DisplayName'].Value
+    $displayVersion = [string]$entry.PSObject.Properties['DisplayVersion'].Value
+
+    return [pscustomobject]@{
+        version     = $displayVersion.Trim()
+        method      = 'Windows uninstall registry'
+        displayName = $displayName
+    }
+}
+
+function Get-UiPathInventory {
+    # This detector intentionally uses several independent Windows evidence
+    # sources. No one source is trusted as mandatory because UiPath currently
+    # supports both classic MSI installs and the Connected/Platform Installer,
+    # including per-user, per-machine, custom-path, and automatically updated
+    # versioned client directories.
+
+    $registryEntries = @(Get-UiPathRegistryEntriesDeep)
+    $searchRootMap = [ordered]@{}
+    $candidateMap = [ordered]@{}
+
+    function Add-UiPathSearchRootInternal {
+        param(
+            [AllowNull()]
+            [string]$Path,
+
+            [AllowNull()]
+            [string]$Source
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            return
+        }
+
+        try {
+            $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd(
+                [char[]]@('\', '/')
+            )
+        }
+        catch {
+            Write-Verbose "Ignoring invalid UiPath search root '$Path': $($_.Exception.Message)"
+            return
+        }
+
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Container -ErrorAction SilentlyContinue)) {
+            return
+        }
+
+        $key = $fullPath.ToLowerInvariant()
+
+        if (-not $searchRootMap.Contains($key)) {
+            $searchRootMap[$key] = [pscustomobject]@{
+                path   = $fullPath
+                source = $Source
+            }
+        }
+    }
+
+    function Add-UiPathCandidateInternal {
+        param(
+            [AllowNull()]
+            [string]$Path,
+
+            [AllowNull()]
+            [string]$Source
+        )
+
+        $candidate = New-UiPathExecutableCandidate `
+            -Path $Path `
+            -DiscoverySource $Source
+
+        if ($null -eq $candidate) {
+            return
+        }
+
+        $key = ([string]$candidate.path).ToLowerInvariant()
+
+        if (-not $candidateMap.Contains($key)) {
+            $candidateMap[$key] = $candidate
+        }
+    }
+
+    # 1. Official/default classic and Connected Platform Installer roots.
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        Add-UiPathSearchRootInternal `
+            -Path (Join-Path $env:ProgramFiles 'UiPathPlatform') `
+            -Source 'known per-machine UiPathPlatform root'
+
+        Add-UiPathSearchRootInternal `
+            -Path (Join-Path $env:ProgramFiles 'UiPath') `
+            -Source 'known per-machine classic UiPath root'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+        Add-UiPathSearchRootInternal `
+            -Path (Join-Path ${env:ProgramFiles(x86)} 'UiPathPlatform') `
+            -Source 'known 32-bit per-machine UiPathPlatform root'
+
+        Add-UiPathSearchRootInternal `
+            -Path (Join-Path ${env:ProgramFiles(x86)} 'UiPath') `
+            -Source 'known 32-bit classic UiPath root'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        foreach ($relativePath in @(
+            'Programs\UiPathPlatform',
+            'Programs\UiPath',
+            'UiPathPlatform',
+            'UiPath'
+        )) {
+            Add-UiPathSearchRootInternal `
+                -Path (Join-Path $env:LOCALAPPDATA $relativePath) `
+                -Source 'known per-user UiPath root'
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) {
+        Add-UiPathSearchRootInternal `
+            -Path (Join-Path $env:ProgramData 'UiPath') `
+            -Source 'known ProgramData UiPath root'
+    }
+
+    # 2. Uninstall registry evidence: install location, display icon, and paths
+    # discoverable from uninstall strings. This covers custom installation paths.
+    foreach ($entry in $registryEntries) {
+        $displayName = $null
+        $displayNameProperty = $entry.PSObject.Properties['DisplayName']
+
+        if ($null -ne $displayNameProperty) {
+            $displayName = [string]$displayNameProperty.Value
+        }
+
+        foreach ($propertyName in @('InstallLocation')) {
+            $property = $entry.PSObject.Properties[$propertyName]
+
+            if (
+                $null -ne $property -and
+                -not [string]::IsNullOrWhiteSpace([string]$property.Value)
+            ) {
+                Add-UiPathSearchRootInternal `
+                    -Path ([string]$property.Value) `
+                    -Source "uninstall registry: $displayName"
+            }
+        }
+
+        foreach ($propertyName in @('DisplayIcon', 'UninstallString', 'QuietUninstallString')) {
+            $property = $entry.PSObject.Properties[$propertyName]
+
+            if (
+                $null -eq $property -or
+                [string]::IsNullOrWhiteSpace([string]$property.Value)
+            ) {
+                continue
+            }
+
+            $rawValue = [string]$property.Value
+            $possiblePath = $null
+
+            $quotedMatch = [regex]::Match($rawValue, '^\s*"(?<path>[^"]+)"')
+
+            if ($quotedMatch.Success) {
+                $possiblePath = [string]$quotedMatch.Groups['path'].Value
+            }
+            else {
+                $exeMatch = [regex]::Match(
+                    $rawValue,
+                    '(?i)^(?<path>.+?\.exe)(?:\s|,|$)'
+                )
+
+                if ($exeMatch.Success) {
+                    $possiblePath = [string]$exeMatch.Groups['path'].Value
+                }
+            }
+
+            if (
+                -not [string]::IsNullOrWhiteSpace($possiblePath) -and
+                (Test-Path -LiteralPath $possiblePath -PathType Leaf -ErrorAction SilentlyContinue)
+            ) {
+                $possibleRole = Get-UiPathCandidateRole -Path $possiblePath
+                $pathLooksUiPathSpecific = (
+                    $possiblePath -match '(?i)[\\/]UiPath(?:Platform)?[\\/]'
+                )
+
+                # Do not recurse generic installer hosts such as
+                # C:\Windows\System32\msiexec.exe. Only add a registry-derived
+                # parent when the path itself is UiPath-specific or is one of the
+                # exact client executables we know how to classify.
+                if (
+                    -not [string]::IsNullOrWhiteSpace($possibleRole) -or
+                    $pathLooksUiPathSpecific
+                ) {
+                    Add-UiPathSearchRootInternal `
+                        -Path (Split-Path -Path $possiblePath -Parent) `
+                        -Source "uninstall registry ${propertyName}: $displayName"
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($possibleRole)) {
+                    Add-UiPathCandidateInternal `
+                        -Path $possiblePath `
+                        -Source "uninstall registry ${propertyName}: $displayName"
+                }
+            }
+        }
+    }
+
+    # 3. Windows App Paths registry can point directly to registered executables.
+    foreach ($target in @(Get-UiPathAppPathTargets)) {
+        Add-UiPathCandidateInternal -Path $target.path -Source $target.source
+        Add-UiPathSearchRootInternal `
+            -Path (Split-Path -Path $target.path -Parent) `
+            -Source $target.source
+    }
+
+    # 4. Start Menu shortcuts are another independent custom-path locator.
+    foreach ($target in @(Get-UiPathShortcutTargets)) {
+        Add-UiPathCandidateInternal -Path $target.path -Source $target.source
+        Add-UiPathSearchRootInternal `
+            -Path (Split-Path -Path $target.path -Parent) `
+            -Source $target.source
+    }
+
+    # 5. A currently running Studio/Assistant/Robot gives an authoritative
+    # executable path without requiring any installer metadata.
+    foreach ($target in @(Get-UiPathRunningProcessTargets)) {
+        Add-UiPathCandidateInternal -Path $target.path -Source $target.source
+        Add-UiPathSearchRootInternal `
+            -Path (Split-Path -Path $target.path -Parent) `
+            -Source $target.source
+    }
+
+    # 6. Recursively search only UiPath-specific roots, never the entire drive.
+    # Exact executable names keep this bounded and avoid collecting unrelated
+    # package/cache files.
+    $executableNames = @(
+        'UiPath.Studio.exe',
+        'UiPath.Studio.CommandLine.exe',
+        'UiPath.Assistant.exe',
+        'UiRobot.exe',
+        'UiPath.Connected.Updater.App.exe'
+    )
+
+    foreach ($searchRootEntry in @($searchRootMap.Values)) {
+        $root = [string]$searchRootEntry.path
+        $rootSource = [string]$searchRootEntry.source
+
+        Write-Verbose "UiPath search root: $root ($rootSource)"
+
+        foreach ($executableName in $executableNames) {
+            try {
+                foreach ($file in @(
+                    Get-ChildItem `
+                        -LiteralPath $root `
+                        -Filter $executableName `
+                        -File `
+                        -Recurse `
+                        -ErrorAction SilentlyContinue
+                )) {
+                    Add-UiPathCandidateInternal `
+                        -Path $file.FullName `
+                        -Source "filesystem search: $rootSource"
+                }
+            }
+            catch {
+                Write-Verbose "UiPath filesystem probe failed under '$root' for '$executableName': $($_.Exception.Message)"
+            }
+        }
+    }
+
+    $allCandidates = @($candidateMap.Values)
+
+    foreach ($candidate in $allCandidates) {
+        $versionLabel = if (
+            [string]::IsNullOrWhiteSpace([string]$candidate.version)
+        ) {
+            '<version unknown>'
+        }
+        else {
+            [string]$candidate.version
+        }
+
+        Write-Verbose (
+            "UiPath candidate [$($candidate.role)] $($candidate.path) => " +
+            "$versionLabel via $($candidate.versionMethod); source=$($candidate.discoverySource)"
+        )
+    }
+
+    $studioCandidates = @(
+        $allCandidates |
+        Where-Object { $_.role -in @('studio', 'studioCommandLine') }
+    )
+
+    $assistantCandidates = @(
+        $allCandidates |
+        Where-Object { $_.role -eq 'assistant' }
+    )
+
+    $robotCandidates = @(
+        $allCandidates |
+        Where-Object { $_.role -eq 'robot' }
+    )
+
+    $updaterCandidates = @(
+        $allCandidates |
+        Where-Object { $_.role -eq 'updater' }
+    )
+
+    $studioSelection = Select-BestUiPathExecutableCandidate `
+        -Candidates $studioCandidates `
+        -PreferredRoles @('studio', 'studioCommandLine')
+
+    $assistantSelection = Select-BestUiPathExecutableCandidate `
+        -Candidates $assistantCandidates `
+        -PreferredRoles @('assistant')
+
+    $robotSelection = Select-BestUiPathExecutableCandidate `
+        -Candidates $robotCandidates `
+        -PreferredRoles @('robot')
+
+    $updaterSelection = Select-BestUiPathExecutableCandidate `
+        -Candidates $updaterCandidates `
+        -PreferredRoles @('updater')
+
+    $studioRegistryFallback = Get-UiPathRegistryVersionFallback `
+        -RegistryEntries $registryEntries `
+        -Role studio
+
+    $assistantRegistryFallback = Get-UiPathRegistryVersionFallback `
+        -RegistryEntries $registryEntries `
+        -Role assistant
+
+    $platformRegistryFallback = Get-UiPathRegistryVersionFallback `
+        -RegistryEntries $registryEntries `
+        -Role platform
+
+    $studioInstalled = $null -ne $studioSelection
+    $assistantInstalled = $null -ne $assistantSelection
+
+    # If no executable was accessible but Windows explicitly registers Studio,
+    # preserve that as installation evidence instead of incorrectly reporting a
+    # complete miss.
+    if (-not $studioInstalled -and $null -ne $studioRegistryFallback) {
+        $studioInstalled = $true
+    }
+
+    if (-not $assistantInstalled -and $null -ne $assistantRegistryFallback) {
+        $assistantInstalled = $true
+    }
+
+    $studioVersion = $null
+    $studioVersionMethod = $null
+    $studioPath = $null
+    $studioDiscoverySource = $null
+
+    if ($null -ne $studioSelection) {
+        $studioPath = [string]$studioSelection.path
+        $studioDiscoverySource = [string]$studioSelection.discoverySource
+        $studioVersion = [string]$studioSelection.version
+        $studioVersionMethod = [string]$studioSelection.versionMethod
+    }
+
+    if (
+        [string]::IsNullOrWhiteSpace($studioVersion) -and
+        $null -ne $studioRegistryFallback
+    ) {
+        $studioVersion = [string]$studioRegistryFallback.version
+        $studioVersionMethod = [string]$studioRegistryFallback.method
+    }
+
+    # The Platform Installer DisplayVersion is a final last-resort version clue
+    # only when Studio is otherwise positively detected. It is intentionally
+    # lower confidence than a client executable/path or Studio-specific entry.
+    if (
+        $studioInstalled -and
+        [string]::IsNullOrWhiteSpace($studioVersion) -and
+        $null -ne $platformRegistryFallback
+    ) {
+        $studioVersion = [string]$platformRegistryFallback.version
+        $studioVersionMethod = 'UiPath Platform uninstall registry (last-resort fallback)'
     }
 
     $assistantVersion = $null
-    if ($assistantExecutable) {
-        $assistantVersion = Get-FileVersion -Path $assistantExecutable
+    $assistantVersionMethod = $null
+    $assistantPath = $null
+    $assistantDiscoverySource = $null
+
+    if ($null -ne $assistantSelection) {
+        $assistantPath = [string]$assistantSelection.path
+        $assistantDiscoverySource = [string]$assistantSelection.discoverySource
+        $assistantVersion = [string]$assistantSelection.version
+        $assistantVersionMethod = [string]$assistantSelection.versionMethod
+    }
+
+    if (
+        [string]::IsNullOrWhiteSpace($assistantVersion) -and
+        $null -ne $assistantRegistryFallback
+    ) {
+        $assistantVersion = [string]$assistantRegistryFallback.version
+        $assistantVersionMethod = [string]$assistantRegistryFallback.method
     }
 
     $anythingDetected = (
-        $null -ne $studioExecutable -or
-        $null -ne $commandLineExecutable -or
-        $null -ne $assistantExecutable -or
+        $studioInstalled -or
+        $assistantInstalled -or
+        $null -ne $robotSelection -or
+        $null -ne $updaterSelection -or
         $registryEntries.Count -gt 0
     )
 
     if (-not $anythingDetected) {
-        $message = 'UiPath Studio/Assistant was not detected.'
+        $message = 'UiPath Studio/Assistant was not detected after registry, App Paths, Start Menu, process, and filesystem probes.'
         Write-Missing 'UiPath' $message
 
         return [ordered]@{
@@ -1212,71 +2045,137 @@ function Get-UiPathInventory {
             path              = $null
             message           = $message
             studio            = [ordered]@{
-                installed = $false
-                version   = $null
-                path      = $null
+                installed       = $false
+                version         = $null
+                path            = $null
+                versionMethod   = $null
+                discoverySource = $null
+                candidateCount  = 0
             }
             assistant = [ordered]@{
-                installed = $false
-                version   = $null
-                path      = $null
+                installed       = $false
+                version         = $null
+                path            = $null
+                versionMethod   = $null
+                discoverySource = $null
+                candidateCount  = 0
             }
         }
     }
 
-    if (-not $studioVersion) {
-        $message = 'UiPath installation was detected, but Studio version could not be determined.'
-        Write-WarningLine 'UiPath' $message
+    $installationSource = 'windows-installation'
+
+    if (
+        ($studioPath -and $studioPath -match '(?i)[\\/]UiPathPlatform[\\/]') -or
+        ($assistantPath -and $assistantPath -match '(?i)[\\/]UiPathPlatform[\\/]') -or
+        $null -ne $updaterSelection -or
+        $null -ne $platformRegistryFallback
+    ) {
+        $installationSource = 'uipath-platform-installer'
+    }
+
+    if (-not $studioInstalled) {
+        $message = 'UiPath components were detected, but UiPath Studio itself was not found.'
+        Write-WarningLine 'UiPath Studio' $message
+
+        return [ordered]@{
+            installed         = $false
+            inventoryComplete = $false
+            status            = 'studio-missing'
+            version           = $null
+            source            = $installationSource
+            path              = $null
+            message           = $message
+            studio            = [ordered]@{
+                installed       = $false
+                version         = $null
+                path            = $null
+                versionMethod   = $null
+                discoverySource = $null
+                candidateCount  = $studioCandidates.Count
+            }
+            assistant = [ordered]@{
+                installed       = $assistantInstalled
+                version         = $assistantVersion
+                path            = $assistantPath
+                versionMethod   = $assistantVersionMethod
+                discoverySource = $assistantDiscoverySource
+                candidateCount  = $assistantCandidates.Count
+            }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($studioVersion)) {
+        $message = 'UiPath Studio was found, but no usable version was available from its versioned path, executable metadata, assembly metadata, or Windows registry.'
+        Write-WarningLine 'UiPath Studio' $message
 
         return [ordered]@{
             installed         = $true
             inventoryComplete = $false
             status            = 'detected-version-unknown'
             version           = $null
-            source            = 'windows-installation'
-            path              = $studioExecutable
+            source            = $installationSource
+            path              = $studioPath
             message           = $message
             studio            = [ordered]@{
-                installed     = ($null -ne $studioExecutable)
-                version       = $null
-                path          = $studioExecutable
-                versionMethod = $null
-                displayName   = $registryDisplayName
+                installed       = $true
+                version         = $null
+                path            = $studioPath
+                versionMethod   = $null
+                discoverySource = $studioDiscoverySource
+                candidateCount  = $studioCandidates.Count
             }
             assistant = [ordered]@{
-                installed = ($null -ne $assistantExecutable)
-                version   = $assistantVersion
-                path      = $assistantExecutable
+                installed       = $assistantInstalled
+                version         = $assistantVersion
+                path            = $assistantPath
+                versionMethod   = $assistantVersionMethod
+                discoverySource = $assistantDiscoverySource
+                candidateCount  = $assistantCandidates.Count
             }
         }
     }
 
-    Write-Detected 'UiPath Studio' "$studioVersion ($versionMethod)"
+    Write-Detected 'UiPath Studio' "$studioVersion ($studioVersionMethod)"
 
-    if ($assistantExecutable) {
-        $assistantLabel = 'installed; version unknown'
-        if ($assistantVersion) {
-            $assistantLabel = $assistantVersion
+    if ($assistantInstalled) {
+        if (-not [string]::IsNullOrWhiteSpace($assistantVersion)) {
+            Write-Detected 'UiPath Assistant' "$assistantVersion ($assistantVersionMethod)"
         }
-
-        Write-Detected 'UiPath Assistant' $assistantLabel
+        else {
+            Write-WarningLine `
+                'UiPath Assistant' `
+                'installed, but version could not be determined'
+        }
     }
     else {
-        Write-WarningLine 'UiPath Assistant' 'Studio detected, but Assistant executable was not found.'
+        Write-WarningLine `
+            'UiPath Assistant' `
+            'Studio detected, but Assistant executable/registration was not found.'
     }
 
     $uiPathInventoryComplete = (
+        $studioInstalled -and
         -not [string]::IsNullOrWhiteSpace($studioVersion) -and
-        $null -ne $assistantExecutable -and
+        $assistantInstalled -and
         -not [string]::IsNullOrWhiteSpace($assistantVersion)
     )
 
-    $uiPathStatus = 'detected-partial'
-    $uiPathMessage = 'UiPath Studio version was captured, but Assistant installation/version is incomplete.'
+    $uiPathStatus = if ($uiPathInventoryComplete) {
+        'detected'
+    }
+    else {
+        'detected-partial'
+    }
 
-    if ($uiPathInventoryComplete) {
-        $uiPathStatus = 'detected'
-        $uiPathMessage = $null
+    $uiPathMessage = if ($uiPathInventoryComplete) {
+        $null
+    }
+    elseif (-not $assistantInstalled) {
+        'UiPath Studio is detected, but Assistant is missing.'
+    }
+    else {
+        'UiPath Studio and Assistant are detected, but Assistant version extraction is incomplete.'
     }
 
     return [ordered]@{
@@ -1284,24 +2183,63 @@ function Get-UiPathInventory {
         inventoryComplete = $uiPathInventoryComplete
         status            = $uiPathStatus
         version           = $studioVersion
-        source            = 'windows-installation'
-        path              = $studioExecutable
+        source            = $installationSource
+        path              = $studioPath
         message           = $uiPathMessage
         studio            = [ordered]@{
-            installed     = $true
-            version       = $studioVersion
-            path          = $studioExecutable
-            commandLine   = $commandLineExecutable
-            versionMethod = $versionMethod
-            displayName   = $registryDisplayName
+            installed       = $studioInstalled
+            version         = $studioVersion
+            path            = $studioPath
+            versionMethod   = $studioVersionMethod
+            discoverySource = $studioDiscoverySource
+            candidateCount  = $studioCandidates.Count
         }
         assistant = [ordered]@{
-            installed = ($null -ne $assistantExecutable)
-            version   = $assistantVersion
-            path      = $assistantExecutable
+            installed       = $assistantInstalled
+            version         = $assistantVersion
+            path            = $assistantPath
+            versionMethod   = $assistantVersionMethod
+            discoverySource = $assistantDiscoverySource
+            candidateCount  = $assistantCandidates.Count
+        }
+        robot = [ordered]@{
+            installed = ($null -ne $robotSelection)
+            version   = if ($null -ne $robotSelection) {
+                [string]$robotSelection.version
+            }
+            else {
+                $null
+            }
+            path      = if ($null -ne $robotSelection) {
+                [string]$robotSelection.path
+            }
+            else {
+                $null
+            }
+        }
+        updater = [ordered]@{
+            installed = ($null -ne $updaterSelection)
+            version   = if ($null -ne $updaterSelection) {
+                [string]$updaterSelection.version
+            }
+            else {
+                $null
+            }
+            path      = if ($null -ne $updaterSelection) {
+                [string]$updaterSelection.path
+            }
+            else {
+                $null
+            }
+        }
+        detection = [ordered]@{
+            registryEntryCount = $registryEntries.Count
+            searchRootCount    = $searchRootMap.Count
+            executableCount    = $allCandidates.Count
         }
     }
 }
+
 
 # ==============================================================================
 # 11. AUTOMATION ANYWHERE BOT AGENT
@@ -1328,7 +2266,7 @@ function Get-AutomationAnywhereInventory {
     }
 
     $installDirectory = $installDirectories |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Container -ErrorAction SilentlyContinue } |
         Select-Object -First 1
 
     $registryVersion = $null
@@ -1468,7 +2406,42 @@ $Pad = Get-PadInventory
 
 Write-Section 'Evergreen vendor clients'
 
-$UiPath = Get-UiPathInventory
+try {
+    $UiPath = Get-UiPathInventory
+}
+catch {
+    $uiPathProbeError = $_.Exception.Message
+    Write-WarningLine `
+        'UiPath' `
+        "inventory probe failed without aborting the lock-file run: $uiPathProbeError"
+
+    $UiPath = [ordered]@{
+        installed         = $false
+        inventoryComplete = $false
+        status            = 'probe-error'
+        version           = $null
+        source            = 'inventory-error'
+        path              = $null
+        message           = $uiPathProbeError
+        studio            = [ordered]@{
+            installed       = $false
+            version         = $null
+            path            = $null
+            versionMethod   = $null
+            discoverySource = $null
+            candidateCount  = 0
+        }
+        assistant = [ordered]@{
+            installed       = $false
+            version         = $null
+            path            = $null
+            versionMethod   = $null
+            discoverySource = $null
+            candidateCount  = 0
+        }
+    }
+}
+
 $AutomationAnywhere = Get-AutomationAnywhereInventory
 
 Write-Section 'Supplemental local context'
