@@ -1,34 +1,11 @@
 ﻿#requires -Version 7.0
 <#
-.SYNOPSIS
-    Captures the installed local toolchain and writes toolchain.lock.json.
-
-.DESCRIPTION
-    The script inventories the local development and automation tools that are
-    currently detectable on the machine.
-
-    Installed tools are recorded with their discovered version and source.
-    Missing or unusable tools are also recorded explicitly in the JSON output and
-    are highlighted in red or yellow in the console. Missing software does not
-    prevent the inventory file from being written.
-
-    The project root is discovered dynamically. Starting from the directory that
-    contains this script, the script walks upward through parent directories until
-    it finds a directory named "invoiceops-lab". toolchain.lock.json is written to
-    that discovered project root. If no such parent directory exists, execution
-    stops with an error before any lock file is created.
-
-    User-specific path prefixes are normalized in the generated JSON so that local
-    Windows profile names are not persisted in the inventory file.
-
-    The script does not read or serialize credentials, authentication tokens,
-    passwords, PAC authentication profiles, .env values, or secret material.
-
-.EXAMPLE
-    pwsh .\toolchain.ps1
-
-.EXAMPLE
-    pwsh .\toolchain.ps1 -Verbose
+AI MAINTENANCE RULES
+- Add a tool as one focused Get-<Tool>Inventory function plus one collection-map entry; reuse existing helpers.
+- Every tool record keeps installed/status/version/source/path/message. Detected without a version => installed=true, inventoryComplete=false.
+- Probe only bounded sources: PATH, registry, AppX/MSIX, known install roots, running processes. Never scan whole drives.
+- Missing tools are inventory data, not fatal errors. Never read secrets; normalize user paths; keep atomic JSON writes.
+- Keep this file compact: no banners, duplicated probes, history/revision metadata, or explanatory comments unless required for safety/compatibility.
 #>
 
 [CmdletBinding()]
@@ -36,2799 +13,717 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-# ==============================================================================
-# 1. PROJECT ROOT DISCOVERY
-# ==============================================================================
-
-$SchemaVersion = 4
 $ProjectDirectoryName = 'invoiceops-lab'
 
 function Find-ProjectRoot {
-    param(
-        [Parameter(Mandatory)]
-        [string]$StartDirectory,
-
-        [Parameter(Mandatory)]
-        [string]$DirectoryName
-    )
-
-    $current = [System.IO.DirectoryInfo]::new(
-        [System.IO.Path]::GetFullPath($StartDirectory)
-    )
-
+    param([string]$StartDirectory, [string]$DirectoryName)
+    $current = [IO.DirectoryInfo]::new([IO.Path]::GetFullPath($StartDirectory))
     while ($null -ne $current) {
-        if ($current.Name -ieq $DirectoryName) {
-            return $current.FullName.TrimEnd([char[]]@('\', '/'))
-        }
-
+        if ($current.Name -ieq $DirectoryName) { return $current.FullName.TrimEnd([char[]]@('\', '/')) }
         $current = $current.Parent
     }
-
-    return $null
+    $null
 }
-
-$ScriptDirectory = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd(
-    [char[]]@('\', '/')
-)
-
-$RepoRoot = Find-ProjectRoot `
-    -StartDirectory $ScriptDirectory `
-    -DirectoryName $ProjectDirectoryName
-
-if ([string]::IsNullOrWhiteSpace([string]$RepoRoot)) {
-    Write-Host ''
-    Write-Host (
-        "FATAL: could not find a parent directory named '$ProjectDirectoryName'."
-    ) -ForegroundColor Red
-    Write-Host (
-        'Place this script somewhere inside that project directory and run it again.'
-    ) -ForegroundColor Red
-    exit 2
-}
-
-$ProjectName = Split-Path -Path $RepoRoot -Leaf
-$LockFile = Join-Path -Path $RepoRoot -ChildPath 'toolchain.lock.json'
-$TemporaryLockFile = "$LockFile.tmp-$PID"
-
-# ==============================================================================
-# 2. CONSOLE HELPERS
-# ==============================================================================
 
 function Write-Section {
-    param([Parameter(Mandatory)][string]$Title)
-
+    param([string]$Title)
     Write-Host ''
-    Write-Host ('=' * 78) -ForegroundColor DarkGray
-    Write-Host $Title -ForegroundColor Cyan
-    Write-Host ('=' * 78) -ForegroundColor DarkGray
+    Write-Host "== $Title ==" -ForegroundColor Cyan
 }
 
-function Write-Detected {
-    param(
-        [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$Message
-    )
-
-    Write-Host '[ OK ] ' -ForegroundColor Green -NoNewline
-    Write-Host ('{0,-28} {1}' -f $Name, $Message)
+function Write-Status {
+    param([ValidateSet('OK', 'MISS', 'WARN')][string]$State, [string]$Name, [string]$Message)
+    $color = switch ($State) { 'OK' { 'Green' } 'MISS' { 'Red' } default { 'Yellow' } }
+    Write-Host ("[{0,-4}] {1,-24} {2}" -f $State, $Name, $Message) -ForegroundColor $color
 }
-
-function Write-Missing {
-    param(
-        [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$Message
-    )
-
-    Write-Host '[MISS] ' -ForegroundColor Red -NoNewline
-    Write-Host ('{0,-28} {1}' -f $Name, $Message) -ForegroundColor Red
-}
-
-function Write-WarningLine {
-    param(
-        [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$Message
-    )
-
-    Write-Host '[WARN] ' -ForegroundColor Yellow -NoNewline
-    Write-Host ('{0,-28} {1}' -f $Name, $Message) -ForegroundColor Yellow
-}
-
-# ==============================================================================
-# 3. GENERIC HELPERS
-# ==============================================================================
 
 function Find-Application {
-    param([Parameter(Mandatory)][string]$Name)
-
-    try {
-        return Get-Command `
-            -Name $Name `
-            -CommandType Application,ExternalScript `
-            -ErrorAction Stop |
-            Select-Object -First 1
-    }
-    catch {
-        return $null
-    }
+    param([string]$Name)
+    try { Get-Command -Name $Name -CommandType Application, ExternalScript -ErrorAction Stop | Select-Object -First 1 }
+    catch { $null }
 }
 
 function Get-CommandPath {
     param($CommandInfo)
-
-    if ($null -eq $CommandInfo) {
-        return $null
+    if ($null -eq $CommandInfo) { return $null }
+    foreach ($name in 'Source', 'Path', 'Definition') {
+        $p = $CommandInfo.PSObject.Properties[$name]
+        if ($null -ne $p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return [string]$p.Value }
     }
-
-    foreach ($propertyName in @('Source', 'Path', 'Definition')) {
-        if ($CommandInfo.PSObject.Properties.Name -contains $propertyName) {
-            $value = [string]$CommandInfo.$propertyName
-            if (-not [string]::IsNullOrWhiteSpace($value)) {
-                return $value
-            }
-        }
-    }
-
-    return [string]$CommandInfo.Name
+    [string]$CommandInfo.Name
 }
 
 function Invoke-NativeCapture {
-    param(
-        [Parameter(Mandatory)][string]$FilePath,
-        [string[]]$Arguments = @()
-    )
-
+    param([string]$FilePath, [string[]]$Arguments = @())
     try {
-        $rawOutput = & $FilePath @Arguments 2>&1
-        $exitCode = $LASTEXITCODE
-
-        if ($null -eq $exitCode) {
-            $exitCode = 0
-        }
-
-        $output = (($rawOutput | ForEach-Object { $_.ToString() }) -join "`n")
-        $output = ($output -replace "`0", '').Trim()
-
-        return [pscustomobject]@{
-            success  = ($exitCode -eq 0)
-            exitCode = [int]$exitCode
-            output   = $output
-        }
+        $raw = & $FilePath @Arguments 2>&1
+        $code = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+        [pscustomobject]@{ success = ($code -eq 0); exitCode = $code; output = (($raw | ForEach-Object { $_.ToString() }) -join "`n" -replace "`0", '').Trim() }
     }
-    catch {
-        return [pscustomobject]@{
-            success  = $false
-            exitCode = -1
-            output   = $_.Exception.Message
-        }
-    }
+    catch { [pscustomobject]@{ success = $false; exitCode = -1; output = $_.Exception.Message } }
 }
 
 function Get-VersionToken {
     param([AllowNull()][string]$Text)
-
-    if ([string]::IsNullOrWhiteSpace($Text)) {
-        return $null
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    foreach ($pattern in @(
+        '(?im)\bversion[:\s]+v?(?<version>\d+(?:\.\d+){1,5}(?:[-+._][0-9A-Za-z.-]+)?)',
+        '(?im)\bv?(?<version>\d+(?:\.\d+){1,5}(?:[-+._][0-9A-Za-z.-]+)?)\b'
+    )) {
+        if ($Text -match $pattern) { return $Matches.version.Trim() }
     }
-
-    # Prefer a dotted token explicitly following the word "version".
-    if ($Text -match '(?im)\bversion[:\s]+v?(?<version>\d+(?:\.\d+){1,5}(?:[-+._][0-9A-Za-z.-]+)?)') {
-        return $Matches.version.Trim()
-    }
-
-    # Generic fallback for output such as "uv 0.8.8" or "1.2.3".
-    if ($Text -match '(?im)\bv?(?<version>\d+(?:\.\d+){1,5}(?:[-+._][0-9A-Za-z.-]+)?)\b') {
-        return $Matches.version.Trim()
-    }
-
-    return $null
+    $null
 }
 
 function Get-FileVersion {
-    param([Parameter(Mandatory)][string]$Path)
-
+    param([string]$Path)
     try {
-        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            return $null
-        }
-
-        $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
-
-        foreach ($candidate in @($versionInfo.ProductVersion, $versionInfo.FileVersion)) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+        $v = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+        foreach ($candidate in @($v.ProductVersion, $v.FileVersion)) {
             if (-not [string]::IsNullOrWhiteSpace([string]$candidate)) {
-                $version = Get-VersionToken -Text ([string]$candidate)
-                if ($version) {
-                    return $version
-                }
-
-                return ([string]$candidate).Trim()
+                $parsed = Get-VersionToken ([string]$candidate)
+                return $(if ($parsed) { $parsed } else { ([string]$candidate).Trim() })
             }
         }
     }
-    catch {
-        Write-Verbose "Unable to read version metadata for '$Path': $($_.Exception.Message)"
-    }
-
-    return $null
+    catch { Write-Verbose "Version metadata failed for '$Path': $($_.Exception.Message)" }
+    $null
 }
 
-function New-InstalledRecord {
+function New-InventoryRecord {
     param(
-        [Parameter(Mandatory)][string]$Version,
-        [Parameter(Mandatory)][string]$Source,
+        [bool]$Installed,
+        [string]$Status,
+        [AllowNull()][string]$Version,
+        [string]$Source,
         [AllowNull()][string]$Path,
-        [AllowNull()][hashtable]$Extra
+        [AllowNull()][string]$Message,
+        [AllowNull()][System.Collections.IDictionary]$Extra
     )
-
-    $record = [ordered]@{
-        installed = $true
-        status    = 'detected'
-        version   = $Version
-        source    = $Source
-        path      = $Path
-        message   = $null
-    }
-
-    if ($null -ne $Extra) {
-        foreach ($key in $Extra.Keys) {
-            $record[$key] = $Extra[$key]
-        }
-    }
-
-    return $record
+    $r = [ordered]@{ installed = $Installed; status = $Status; version = $Version; source = $Source; path = $Path; message = $Message }
+    if ($null -ne $Extra) { foreach ($key in $Extra.Keys) { $r[$key] = $Extra[$key] } }
+    $r
 }
 
 function New-MissingRecord {
-    param(
-        [Parameter(Mandatory)][string]$Message,
-        [string]$Source = 'not-detected',
-        [AllowNull()][string]$Path = $null
-    )
-
-    return [ordered]@{
-        installed = $false
-        status    = 'missing'
-        version   = $null
-        source    = $Source
-        path      = $Path
-        message   = $Message
-    }
+    param([string]$Message, [string]$Source = 'not-detected', [AllowNull()][string]$Path = $null)
+    New-InventoryRecord $false 'missing' $null $Source $Path $Message $null
 }
 
-function New-UnusableRecord {
-    param(
-        [Parameter(Mandatory)][string]$Message,
-        [Parameter(Mandatory)][string]$Source,
-        [AllowNull()][string]$Path
-    )
-
-    return [ordered]@{
-        installed = $false
-        status    = 'unusable'
-        version   = $null
-        source    = $Source
-        path      = $Path
-        message   = $Message
-    }
+function Get-PropertyValue {
+    param($Object, [string]$Name)
+    if ($null -eq $Object) { return $null }
+    $p = $Object.PSObject.Properties[$Name]
+    if ($null -eq $p) { return $null }
+    $p.Value
 }
 
 function Get-UninstallEntries {
-    param([Parameter(Mandatory)][string]$DisplayNamePattern)
-
-    $entries = [System.Collections.Generic.List[object]]::new()
-
-    foreach ($registryPath in @(
+    param([string]$DisplayNamePattern)
+    $out = @()
+    foreach ($path in @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
     )) {
         try {
-            $matches = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $displayNameProperty = $_.PSObject.Properties['DisplayName']
-
-                    $null -ne $displayNameProperty -and
-                    -not [string]::IsNullOrWhiteSpace([string]$displayNameProperty.Value) -and
-                    ([string]$displayNameProperty.Value -match $DisplayNamePattern)
-                }
-
-            foreach ($entry in $matches) {
-                $entries.Add($entry)
-            }
+            $out += @(Get-ItemProperty -Path $path -ErrorAction SilentlyContinue | Where-Object {
+                $name = [string](Get-PropertyValue $_ 'DisplayName')
+                -not [string]::IsNullOrWhiteSpace($name) -and $name -match $DisplayNamePattern
+            })
         }
-        catch {
-            Write-Verbose "Registry inventory failed at '$registryPath': $($_.Exception.Message)"
-        }
+        catch { Write-Verbose "Registry probe failed at '$path': $($_.Exception.Message)" }
     }
+    @($out)
+}
 
-    return @($entries)
+function Get-AppxMatch {
+    param([string]$Name, [string]$Pattern)
+    try {
+        $p = Get-AppxPackage -Name $Name -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
+        if ($p) { return $p }
+    }
+    catch { Write-Verbose "AppX '$Name' probe failed: $($_.Exception.Message)" }
+    try {
+        Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object {
+            [string]$_.Name -match $Pattern -or [string]$_.PackageFamilyName -match $Pattern
+        } | Sort-Object Version -Descending | Select-Object -First 1
+    }
+    catch { Write-Verbose "AppX fallback '$Pattern' probe failed: $($_.Exception.Message)"; $null }
+}
+
+function Get-DisplayIconExecutable {
+    param([AllowNull()][string]$Value, [string]$ExePattern = '.+?\.exe')
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    $m = [regex]::Match($Value, '^\s*"(?<path>[^\"]+\.exe)"|^(?<path2>' + $ExePattern + ')(?:,|\s|$)', 'IgnoreCase')
+    if ($m.Groups['path'].Success) { return $m.Groups['path'].Value }
+    if ($m.Groups['path2'].Success) { return $m.Groups['path2'].Value }
+    $null
+}
+
+function Get-FirstExistingFile {
+    param([string[]]$Paths)
+    $Paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Leaf -ErrorAction SilentlyContinue) } | Select-Object -First 1
+}
+
+function Test-InventoryRecordComplete {
+    param($Record)
+    if ($null -eq $Record -or -not ($Record -is [System.Collections.IDictionary])) { return $false }
+    if ($Record.Contains('inventoryComplete')) { return [bool]$Record.inventoryComplete }
+    $Record.Contains('installed') -and [bool]$Record.installed -and $Record.Contains('version') -and -not [string]::IsNullOrWhiteSpace([string]$Record.version)
+}
+
+function Protect-JsonUserPaths {
+    param([string]$Json)
+    $items = @(
+        @{ value = $env:LOCALAPPDATA; token = '%LOCALAPPDATA%' },
+        @{ value = $env:APPDATA; token = '%APPDATA%' },
+        @{ value = $env:USERPROFILE; token = '%USERPROFILE%' },
+        @{ value = $HOME; token = '%HOME%' }
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.value) }
+    $seen = @{}
+    $items = foreach ($item in $items) {
+        try { $full = [IO.Path]::GetFullPath([string]$item.value).TrimEnd([char[]]@('\', '/')) } catch { continue }
+        $key = $full.ToLowerInvariant()
+        if (-not $seen.ContainsKey($key)) { $seen[$key] = $true; [pscustomobject]@{ value = $full; token = $item.token } }
+    }
+    $result = $Json
+    foreach ($item in @($items | Sort-Object { $_.value.Length } -Descending)) {
+        $escaped = ([string]$item.value).Replace('\', '\\')
+        $result = [regex]::Replace($result, [regex]::Escape($escaped), [string]$item.token, 'IgnoreCase')
+    }
+    $result
 }
 
 function Get-Sha256Text {
-    param([Parameter(Mandatory)][string]$Text)
-
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
-    $sha256 = [System.Security.Cryptography.SHA256]::Create()
-
-    try {
-        $hash = $sha256.ComputeHash($bytes)
-        return ([System.BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
-    }
-    finally {
-        $sha256.Dispose()
-    }
+    param([string]$Text)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text))) -replace '-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
 }
-
-
-function Test-InventoryRecordComplete {
-    param([Parameter(Mandatory)]$Record)
-
-    if ($null -eq $Record) {
-        return $false
-    }
-
-    if (
-        $Record -is [System.Collections.IDictionary] -and
-        $Record.Contains('inventoryComplete')
-    ) {
-        return [bool]$Record['inventoryComplete']
-    }
-
-    if (-not ($Record -is [System.Collections.IDictionary])) {
-        return $false
-    }
-
-    $installed = (
-        $Record.Contains('installed') -and
-        [bool]$Record['installed']
-    )
-
-    $versionCaptured = (
-        $Record.Contains('version') -and
-        -not [string]::IsNullOrWhiteSpace([string]$Record['version'])
-    )
-
-    return ($installed -and $versionCaptured)
-}
-
-# ==============================================================================
-# 4. PRIVACY-SAFE JSON PATHS
-# ==============================================================================
-
-function Protect-JsonUserPaths {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Json
-    )
-
-    $result = $Json
-    $candidates = [System.Collections.Generic.List[object]]::new()
-
-    foreach ($entry in @(
-        @{ value = $env:LOCALAPPDATA; token = '%LOCALAPPDATA%' },
-        @{ value = $env:APPDATA;      token = '%APPDATA%' },
-        @{ value = $env:USERPROFILE;  token = '%USERPROFILE%' },
-        @{ value = $HOME;             token = '%HOME%' }
-    )) {
-        if ([string]::IsNullOrWhiteSpace([string]$entry.value)) {
-            continue
-        }
-
-        $fullPath = [System.IO.Path]::GetFullPath([string]$entry.value).TrimEnd(
-            [char[]]@('\', '/')
-        )
-
-        $alreadyPresent = $false
-
-        foreach ($candidate in $candidates) {
-            if (
-                [string]::Equals(
-                    [string]$candidate.value,
-                    $fullPath,
-                    [System.StringComparison]::OrdinalIgnoreCase
-                )
-            ) {
-                $alreadyPresent = $true
-                break
-            }
-        }
-
-        if (-not $alreadyPresent) {
-            $candidates.Add(
-                [pscustomobject]@{
-                    value = $fullPath
-                    token = [string]$entry.token
-                }
-            )
-        }
-    }
-
-    $orderedCandidates = @(
-        $candidates |
-        Sort-Object {
-            ([string]$_.value).Length
-        } -Descending
-    )
-
-    foreach ($candidate in $orderedCandidates) {
-        # Convert the Windows path to the representation used inside JSON strings.
-        $jsonPath = ([string]$candidate.value).Replace('\', '\\')
-
-        $result = [System.Text.RegularExpressions.Regex]::Replace(
-            $result,
-            [System.Text.RegularExpressions.Regex]::Escape($jsonPath),
-            [string]$candidate.token,
-            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-        )
-    }
-
-    return $result
-}
-
-# ==============================================================================
-# 5. DISCOVERED PROJECT ROOT
-# ==============================================================================
-
-Write-Section 'InvoiceOps · Toolchain inventory'
-
-Write-Host "Script : $(Split-Path -Path $PSCommandPath -Leaf)" -ForegroundColor DarkGray
-Write-Host "Root   : $ProjectName" -ForegroundColor DarkGray
-Write-Host "Output : toolchain.lock.json" -ForegroundColor DarkGray
-
-Write-Detected 'project root' $ProjectName
-
-# Run context-sensitive version probes from the discovered project root. This avoids
-# accidentally inheriting project-local configuration from the caller's directory.
-Set-Location -LiteralPath $RepoRoot
-
-# ==============================================================================
-# 6. HOST / POWERSHELL / WSL
-# ==============================================================================
 
 function Get-HostInventory {
-    $operatingSystem = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription.Trim()
-    $osVersion = [System.Environment]::OSVersion.Version.ToString()
-
+    $name = [Runtime.InteropServices.RuntimeInformation]::OSDescription.Trim()
+    $version = [Environment]::OSVersion.Version.ToString()
     try {
-        $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-
-        if (-not [string]::IsNullOrWhiteSpace([string]$os.Caption)) {
-            $operatingSystem = [string]$os.Caption
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace([string]$os.Version)) {
-            $osVersion = [string]$os.Version
-        }
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        if ($os.Caption) { $name = [string]$os.Caption }
+        if ($os.Version) { $version = [string]$os.Version }
     }
-    catch {
-        Write-Verbose "Win32_OperatingSystem query failed: $($_.Exception.Message)"
-    }
-
-    return [ordered]@{
-        operatingSystem = $operatingSystem
-        osVersion       = $osVersion
-        architecture    = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-        powerShell      = [ordered]@{
+    catch { Write-Verbose "OS probe failed: $($_.Exception.Message)" }
+    [ordered]@{
+        operatingSystem = $name
+        osVersion = $version
+        architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+        powerShell = [ordered]@{
             installed = $true
-            status    = 'detected'
-            version   = $PSVersionTable.PSVersion.ToString()
-            edition   = [string]$PSVersionTable.PSEdition
-            path      = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+            status = 'detected'
+            version = $PSVersionTable.PSVersion.ToString()
+            edition = [string]$PSVersionTable.PSEdition
+            path = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
         }
     }
 }
 
 function Get-WslInventory {
-    $command = Find-Application -Name 'wsl.exe'
-
-    if ($null -eq $command) {
-        return [ordered]@{
-            installed           = $false
-            status              = 'missing'
-            version             = $null
-            path                = $null
-            distributions       = @()
-            preferredDistro     = $null
-            statusCommandPassed = $false
-            message             = 'wsl.exe was not found.'
-        }
+    $cmd = Find-Application 'wsl.exe'
+    if (-not $cmd) {
+        return [ordered]@{ installed = $false; status = 'missing'; version = $null; path = $null; distributions = @(); preferredDistro = $null; statusCommandPassed = $false; message = 'wsl.exe was not found.' }
     }
-
-    $path = Get-CommandPath -CommandInfo $command
-
-    $versionProbe = Invoke-NativeCapture -FilePath $path -Arguments @('--version')
-    $statusProbe = Invoke-NativeCapture -FilePath $path -Arguments @('--status')
-    $listProbe = Invoke-NativeCapture -FilePath $path -Arguments @('-l', '-q')
-
-    $version = $null
-    if ($versionProbe.success) {
-        $version = Get-VersionToken -Text $versionProbe.output
-    }
-
-    $distributions = @()
-    if ($listProbe.success -and -not [string]::IsNullOrWhiteSpace($listProbe.output)) {
-        $cleanOutput = $listProbe.output -replace "`0", ''
-
-        $distributions = @(
-            $cleanOutput -split "`r?`n" |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -ne '' }
-        )
-    }
-
-    $preferredDistro = $null
-
-    if ($distributions -contains 'Ubuntu-24.04') {
-        $preferredDistro = 'Ubuntu-24.04'
-    }
-    elseif ($distributions.Count -gt 0) {
-        $preferredDistro = $distributions |
-            Where-Object { $_ -match '(?i)ubuntu' } |
-            Select-Object -First 1
-
-        if (-not $preferredDistro) {
-            $preferredDistro = $distributions | Select-Object -First 1
-        }
-    }
-
-    return [ordered]@{
-        installed           = $true
-        status              = 'detected'
-        version             = $version
-        path                = $path
-        distributions       = @($distributions)
-        preferredDistro     = $preferredDistro
-        statusCommandPassed = [bool]$statusProbe.success
-        message             = $null
-    }
+    $path = Get-CommandPath $cmd
+    $vp = Invoke-NativeCapture $path @('--version')
+    $sp = Invoke-NativeCapture $path @('--status')
+    $lp = Invoke-NativeCapture $path @('-l', '-q')
+    $distros = if ($lp.success) { @((($lp.output -replace "`0", '') -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
+    $preferred = if ($distros -contains 'Ubuntu-24.04') { 'Ubuntu-24.04' } else { $distros | Where-Object { $_ -match '(?i)ubuntu' } | Select-Object -First 1 }
+    if (-not $preferred -and $distros.Count) { $preferred = $distros[0] }
+    [ordered]@{ installed = $true; status = 'detected'; version = $(if ($vp.success) { Get-VersionToken $vp.output } else { $null }); path = $path; distributions = @($distros); preferredDistro = $preferred; statusCommandPassed = [bool]$sp.success; message = $null }
 }
-
-# ==============================================================================
-# 6. GENERIC CLI INVENTORY
-# ==============================================================================
 
 function Get-CliInventory {
     param(
-        [Parameter(Mandatory)][string]$DisplayName,
-        [Parameter(Mandatory)][string]$CommandName,
+        [string]$DisplayName,
+        [string]$CommandName,
         [string[]]$VersionArguments = @('--version'),
         [AllowNull()][string]$VersionRegex = $null,
         [ValidateSet('core', 'supplemental')][string]$Importance = 'core'
     )
-
-    $command = Find-Application -Name $CommandName
-
-    if ($null -eq $command) {
-        $message = "'$CommandName' was not found in Windows PATH."
-
-        if ($Importance -eq 'core') {
-            Write-Missing $DisplayName $message
-        }
-        else {
-            Write-WarningLine $DisplayName $message
-        }
-
-        return New-MissingRecord -Message $message
+    $cmd = Find-Application $CommandName
+    $state = if ($Importance -eq 'core') { 'MISS' } else { 'WARN' }
+    if (-not $cmd) {
+        $m = "'$CommandName' was not found in Windows PATH."
+        Write-Status $state $DisplayName $m
+        return New-MissingRecord $m
     }
-
-    $path = Get-CommandPath -CommandInfo $command
-    $probe = Invoke-NativeCapture -FilePath $path -Arguments $VersionArguments
-
+    $path = Get-CommandPath $cmd
+    $probe = Invoke-NativeCapture $path $VersionArguments
     if (-not $probe.success) {
-        $message = "'$CommandName' exists, but its version probe failed with exit code $($probe.exitCode)."
-
-        if ($Importance -eq 'core') {
-            Write-Missing $DisplayName $message
-        }
-        else {
-            Write-WarningLine $DisplayName $message
-        }
-
-        return New-UnusableRecord -Message $message -Source 'windows-path' -Path $path
+        $m = "'$CommandName' exists, but its version probe failed with exit code $($probe.exitCode)."
+        Write-Status $state $DisplayName $m
+        return New-InventoryRecord $false 'unusable' $null 'windows-path' $path $m $null
     }
-
-    $version = $null
-
-    if (
-        -not [string]::IsNullOrWhiteSpace($VersionRegex) -and
-        $probe.output -match $VersionRegex
-    ) {
-        $version = $Matches.version
-    }
-
+    $version = if ($VersionRegex -and $probe.output -match $VersionRegex) { $Matches.version } else { Get-VersionToken $probe.output }
     if (-not $version) {
-        $version = Get-VersionToken -Text $probe.output
+        $m = "'$CommandName' responded, but its version could not be parsed."
+        Write-Status $state $DisplayName $m
+        return New-InventoryRecord $false 'unusable' $null 'windows-path' $path $m $null
     }
-
-    if (-not $version) {
-        $message = "'$CommandName' responded successfully, but its version could not be parsed."
-
-        if ($Importance -eq 'core') {
-            Write-Missing $DisplayName $message
-        }
-        else {
-            Write-WarningLine $DisplayName $message
-        }
-
-        return New-UnusableRecord -Message $message -Source 'windows-path' -Path $path
-    }
-
-    Write-Detected $DisplayName $version
-
-    return New-InstalledRecord `
-        -Version $version `
-        -Source 'windows-path' `
-        -Path $path `
-        -Extra $null
+    Write-Status OK $DisplayName $version
+    New-InventoryRecord $true 'detected' $version 'windows-path' $path $null $null
 }
-
-# ==============================================================================
-# 7. PAC CLI
-# ==============================================================================
 
 function Get-PacInventory {
-    $command = Find-Application -Name 'pac'
-
-    if ($null -eq $command) {
-        $message = "'pac' was not found in Windows PATH."
-        Write-Missing 'pac' $message
-        return New-MissingRecord -Message $message
+    $cmd = Find-Application 'pac'
+    if (-not $cmd) { $m = "'pac' was not found in Windows PATH."; Write-Status MISS pac $m; return New-MissingRecord $m }
+    $path = Get-CommandPath $cmd
+    $version = $null; $method = $null
+    foreach ($p in @(@{ a = @(); m = 'pac' }, @{ a = @('--version'); m = 'pac --version' })) {
+        $probe = Invoke-NativeCapture $path $p.a
+        if ($probe.success) { $version = Get-VersionToken $probe.output }
+        if ($version) { $method = $p.m; break }
     }
-
-    $path = Get-CommandPath -CommandInfo $command
-    $version = $null
-    $versionMethod = $null
-
-    # Microsoft's documented version check is invoking `pac` with no command.
-    # Keep --version and executable metadata as resilient fallbacks.
-    foreach ($probeDefinition in @(
-        @{ arguments = @();            method = 'pac' },
-        @{ arguments = @('--version'); method = 'pac --version' }
-    )) {
-        $probe = Invoke-NativeCapture `
-            -FilePath $path `
-            -Arguments $probeDefinition.arguments
-
-        if ($probe.success -and -not [string]::IsNullOrWhiteSpace($probe.output)) {
-            $candidate = Get-VersionToken -Text $probe.output
-
-            if ($candidate) {
-                $version = $candidate
-                $versionMethod = $probeDefinition.method
-                break
-            }
-        }
-    }
-
-    if (-not $version -and (Test-Path -LiteralPath $path -PathType Leaf)) {
-        $version = Get-FileVersion -Path $path
-        if ($version) {
-            $versionMethod = 'executable metadata'
-        }
-    }
-
-    if (-not $version) {
-        $message = 'PAC CLI was detected, but its version could not be determined.'
-        Write-Missing 'pac' $message
-
-        return New-UnusableRecord `
-            -Message $message `
-            -Source 'windows-path' `
-            -Path $path
-    }
-
-    Write-Detected 'pac' "$version ($versionMethod)"
-
-    return New-InstalledRecord `
-        -Version $version `
-        -Source 'windows-path' `
-        -Path $path `
-        -Extra @{
-            versionMethod = $versionMethod
-        }
+    if (-not $version) { $version = Get-FileVersion $path; if ($version) { $method = 'executable metadata' } }
+    if (-not $version) { $m = 'PAC CLI was detected, but its version could not be determined.'; Write-Status MISS pac $m; return New-InventoryRecord $false 'unusable' $null 'windows-path' $path $m $null }
+    Write-Status OK pac "$version ($method)"
+    New-InventoryRecord $true 'detected' $version 'windows-path' $path $null @{ versionMethod = $method }
 }
 
-# ==============================================================================
-# 8. DOCKER + COMPOSE
-# ==============================================================================
-
-function Get-DockerComposeVersionWindows {
-    param([Parameter(Mandatory)][string]$DockerPath)
-
-    $probe = Invoke-NativeCapture `
-        -FilePath $DockerPath `
-        -Arguments @('compose', 'version', '--short')
-
-    if ($probe.success -and -not [string]::IsNullOrWhiteSpace($probe.output)) {
-        return $probe.output.Trim().TrimStart('v')
+function Get-DockerComposeVersion {
+    param([string]$DockerPath, [AllowNull()][string]$WslPath, [AllowNull()][string]$Distribution)
+    if ($WslPath) {
+        foreach ($command in 'docker compose version --short', 'docker compose version') {
+            $p = Invoke-NativeCapture $WslPath @('-d', $Distribution, '--', 'bash', '-lc', $command)
+            if ($p.success) { $v = if ($command -like '*--short') { $p.output.Trim().TrimStart('v') } else { Get-VersionToken $p.output }; if ($v) { return $v } }
+        }
+        return $null
     }
-
-    $probe = Invoke-NativeCapture `
-        -FilePath $DockerPath `
-        -Arguments @('compose', 'version')
-
-    if ($probe.success) {
-        return Get-VersionToken -Text $probe.output
+    foreach ($a in @(@('compose', 'version', '--short'), @('compose', 'version'))) {
+        $p = Invoke-NativeCapture $DockerPath $a
+        if ($p.success) { $v = if ($a -contains '--short') { $p.output.Trim().TrimStart('v') } else { Get-VersionToken $p.output }; if ($v) { return $v } }
     }
-
-    return $null
-}
-
-function Get-DockerComposeVersionWsl {
-    param(
-        [Parameter(Mandatory)][string]$WslPath,
-        [Parameter(Mandatory)][string]$Distribution
-    )
-
-    $probe = Invoke-NativeCapture `
-        -FilePath $WslPath `
-        -Arguments @(
-            '-d', $Distribution, '--',
-            'bash', '-lc',
-            'docker compose version --short'
-        )
-
-    if ($probe.success -and -not [string]::IsNullOrWhiteSpace($probe.output)) {
-        return $probe.output.Trim().TrimStart('v')
-    }
-
-    $probe = Invoke-NativeCapture `
-        -FilePath $WslPath `
-        -Arguments @(
-            '-d', $Distribution, '--',
-            'bash', '-lc',
-            'docker compose version'
-        )
-
-    if ($probe.success) {
-        return Get-VersionToken -Text $probe.output
-    }
-
-    return $null
+    $null
 }
 
 function Get-DockerInventory {
-    param([Parameter(Mandatory)]$WslInventory)
-
-    # 1. Native Windows Docker, if present.
-    $nativeCommand = Find-Application -Name 'docker'
-
-    if ($null -ne $nativeCommand) {
-        $path = Get-CommandPath -CommandInfo $nativeCommand
-        $probe = Invoke-NativeCapture -FilePath $path -Arguments @('--version')
-
-        if ($probe.success) {
-            $version = Get-VersionToken -Text $probe.output
-
-            if ($version) {
-                $composeVersion = Get-DockerComposeVersionWindows -DockerPath $path
-
-                Write-Detected 'docker' "$version (Windows PATH)"
-
-                if ($composeVersion) {
-                    Write-Detected 'docker compose' $composeVersion
-                }
-                else {
-                    Write-WarningLine 'docker compose' 'Compose plugin version was not detected.'
-                }
-
-                return New-InstalledRecord `
-                    -Version $version `
-                    -Source 'windows-path' `
-                    -Path $path `
-                    -Extra @{
-                        distribution   = $null
-                        composeVersion = $composeVersion
-                    }
-            }
+    param($WslInventory)
+    $cmd = Find-Application 'docker'
+    if ($cmd) {
+        $path = Get-CommandPath $cmd; $p = Invoke-NativeCapture $path @('--version'); $version = if ($p.success) { Get-VersionToken $p.output } else { $null }
+        if ($version) {
+            $compose = Get-DockerComposeVersion $path $null $null
+            Write-Status OK docker "$version (Windows PATH)"
+            if ($compose) { Write-Status OK 'docker compose' $compose } else { Write-Status WARN 'docker compose' 'version not detected' }
+            return New-InventoryRecord $true 'detected' $version 'windows-path' $path $null @{ distribution = $null; composeVersion = $compose }
         }
-
-        Write-WarningLine 'docker' 'Windows docker command exists but did not yield a usable version; trying WSL.'
+        Write-Status WARN docker 'Windows command is unusable; trying WSL.'
     }
-
-    # 2. Expected InvoiceOps topology: Docker Engine in Ubuntu/WSL.
-    if (-not $WslInventory.installed) {
-        $message = 'Docker was not found in Windows PATH and WSL is unavailable.'
-        Write-Missing 'docker' $message
-        return New-MissingRecord -Message $message
+    if (-not $WslInventory.installed -or [string]::IsNullOrWhiteSpace([string]$WslInventory.preferredDistro)) {
+        $m = 'Docker was not found in Windows PATH and no usable WSL distribution is available.'; Write-Status MISS docker $m; return New-MissingRecord $m
     }
-
-    $distribution = [string]$WslInventory.preferredDistro
-
-    if ([string]::IsNullOrWhiteSpace($distribution)) {
-        $message = 'Docker was not found in Windows PATH and no usable WSL distribution was detected.'
-        Write-Missing 'docker' $message
-        return New-MissingRecord -Message $message
-    }
-
-    $wslPath = [string]$WslInventory.path
-
-    $pathProbe = Invoke-NativeCapture `
-        -FilePath $wslPath `
-        -Arguments @(
-            '-d', $distribution, '--',
-            'bash', '-lc',
-            'command -v docker'
-        )
-
-    if (-not $pathProbe.success -or [string]::IsNullOrWhiteSpace($pathProbe.output)) {
-        $message = "Docker was not found in Windows PATH or WSL distribution '$distribution'."
-        Write-Missing 'docker' $message
-        return New-MissingRecord -Message $message
-    }
-
-    $versionProbe = Invoke-NativeCapture `
-        -FilePath $wslPath `
-        -Arguments @(
-            '-d', $distribution, '--',
-            'bash', '-lc',
-            'docker --version'
-        )
-
-    if (-not $versionProbe.success) {
-        $message = "Docker exists in WSL '$distribution', but 'docker --version' failed."
-        Write-Missing 'docker' $message
-
-        return New-UnusableRecord `
-            -Message $message `
-            -Source 'wsl' `
-            -Path $pathProbe.output.Trim()
-    }
-
-    $version = Get-VersionToken -Text $versionProbe.output
-
-    if (-not $version) {
-        $message = "Docker exists in WSL '$distribution', but its version could not be parsed."
-        Write-Missing 'docker' $message
-
-        return New-UnusableRecord `
-            -Message $message `
-            -Source 'wsl' `
-            -Path $pathProbe.output.Trim()
-    }
-
-    $composeVersion = Get-DockerComposeVersionWsl `
-        -WslPath $wslPath `
-        -Distribution $distribution
-
-    Write-Detected 'docker' "$version (WSL: $distribution)"
-
-    if ($composeVersion) {
-        Write-Detected 'docker compose' $composeVersion
-    }
-    else {
-        Write-WarningLine 'docker compose' "Compose plugin version was not detected in WSL '$distribution'."
-    }
-
-    return New-InstalledRecord `
-        -Version $version `
-        -Source 'wsl' `
-        -Path $pathProbe.output.Trim() `
-        -Extra @{
-            distribution   = $distribution
-            composeVersion = $composeVersion
-        }
+    $d = [string]$WslInventory.preferredDistro; $wsl = [string]$WslInventory.path
+    $pp = Invoke-NativeCapture $wsl @('-d', $d, '--', 'bash', '-lc', 'command -v docker')
+    if (-not $pp.success -or -not $pp.output) { $m = "Docker was not found in Windows PATH or WSL '$d'."; Write-Status MISS docker $m; return New-MissingRecord $m }
+    $vp = Invoke-NativeCapture $wsl @('-d', $d, '--', 'bash', '-lc', 'docker --version')
+    $version = if ($vp.success) { Get-VersionToken $vp.output } else { $null }
+    if (-not $version) { $m = "Docker exists in WSL '$d', but its version could not be read."; Write-Status MISS docker $m; return New-InventoryRecord $false 'unusable' $null 'wsl' $pp.output.Trim() $m $null }
+    $compose = Get-DockerComposeVersion $null $wsl $d
+    Write-Status OK docker "$version (WSL: $d)"
+    if ($compose) { Write-Status OK 'docker compose' $compose } else { Write-Status WARN 'docker compose' "version not detected in WSL '$d'" }
+    New-InventoryRecord $true 'detected' $version 'wsl' $pp.output.Trim() $null @{ distribution = $d; composeVersion = $compose }
 }
-
-# ==============================================================================
-# 9. POWER AUTOMATE FOR DESKTOP
-# ==============================================================================
 
 function Get-PadInventory {
-    $registryEntries = @(
-        Get-UninstallEntries `
-            -DisplayNamePattern '(?i)^(Microsoft )?Power Automate for desktop$'
-    )
-
-    $knownExecutables = [System.Collections.Generic.List[string]]::new()
-
-    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
-        $knownExecutables.Add(
-            (Join-Path ${env:ProgramFiles(x86)} 'Power Automate Desktop\dotnet\PAD.Console.Host.exe')
-        )
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
-        $knownExecutables.Add(
-            (Join-Path $env:ProgramFiles 'Power Automate Desktop\dotnet\PAD.Console.Host.exe')
-        )
-    }
-
-    $msiExecutable = $knownExecutables |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-        Select-Object -First 1
-
-    $msiVersion = $null
-    $msiDisplayName = $null
-
-    if ($registryEntries.Count -gt 0) {
-        $entry = $registryEntries |
-            Sort-Object -Property DisplayVersion -Descending |
-            Select-Object -First 1
-
-        $displayNameProperty = $entry.PSObject.Properties['DisplayName']
-        if ($null -ne $displayNameProperty) {
-            $msiDisplayName = [string]$displayNameProperty.Value
-        }
-
-        $displayVersionProperty = $entry.PSObject.Properties['DisplayVersion']
-        if (
-            $null -ne $displayVersionProperty -and
-            -not [string]::IsNullOrWhiteSpace([string]$displayVersionProperty.Value)
-        ) {
-            $msiVersion = [string]$displayVersionProperty.Value
-        }
-    }
-
-    if (-not $msiVersion -and $msiExecutable) {
-        $msiVersion = Get-FileVersion -Path $msiExecutable
-    }
-
-    $storePackage = $null
-
-    try {
-        $storePackage = Get-AppxPackage `
-            -Name 'Microsoft.PowerAutomateDesktop' `
-            -ErrorAction SilentlyContinue |
-            Sort-Object -Property Version -Descending |
-            Select-Object -First 1
-    }
-    catch {
-        Write-Verbose "PAD Get-AppxPackage query failed: $($_.Exception.Message)"
-    }
-
-    if (-not $storePackage) {
-        try {
-            $storePackage = Get-AppxPackage -ErrorAction SilentlyContinue |
-                Where-Object {
-                    ([string]$_.Name -match '(?i)PowerAutomate') -or
-                    ([string]$_.PackageFamilyName -match '(?i)PowerAutomate')
-                } |
-                Sort-Object -Property Version -Descending |
-                Select-Object -First 1
-        }
-        catch {
-            Write-Verbose "PAD fallback Appx query failed: $($_.Exception.Message)"
-        }
-    }
-
-    $hasMsi = (-not [string]::IsNullOrWhiteSpace($msiVersion)) -or ($null -ne $msiExecutable)
-    $hasStore = $null -ne $storePackage
-
-    if ($hasMsi -and $hasStore) {
-        $message = 'Both MSI and Microsoft Store/MSIX PAD installations were detected.'
-
-        Write-WarningLine 'PAD' $message
-
-        $primaryVersion = [string]$storePackage.Version
-        if ($msiVersion) {
-            $primaryVersion = $msiVersion
-        }
-
-        return [ordered]@{
-            installed     = $true
-            status        = 'detected-with-warning'
-            version       = $primaryVersion
-            source        = 'multiple-installations'
-            path          = $msiExecutable
-            message       = $message
-            installType   = 'multiple'
+    $reg = @(Get-UninstallEntries '(?i)^(Microsoft )?Power Automate for desktop$')
+    $paths = @()
+    if (${env:ProgramFiles(x86)}) { $paths += Join-Path ${env:ProgramFiles(x86)} 'Power Automate Desktop\dotnet\PAD.Console.Host.exe' }
+    if ($env:ProgramFiles) { $paths += Join-Path $env:ProgramFiles 'Power Automate Desktop\dotnet\PAD.Console.Host.exe' }
+    $exe = Get-FirstExistingFile $paths
+    $entry = $reg | Sort-Object DisplayVersion -Descending | Select-Object -First 1
+    $directVersion = [string](Get-PropertyValue $entry 'DisplayVersion'); if (-not $directVersion -and $exe) { $directVersion = Get-FileVersion $exe }
+    $store = Get-AppxMatch 'Microsoft.PowerAutomateDesktop' '(?i)PowerAutomate'
+    $hasDirect = $reg.Count -gt 0 -or $exe; $hasStore = $null -ne $store
+    if ($hasDirect -and $hasStore) {
+        $m = 'Both MSI and Microsoft Store/MSIX PAD installations were detected.'; Write-Status WARN PAD $m
+        return New-InventoryRecord $true 'detected-with-warning' $(if ($directVersion) { $directVersion } else { [string]$store.Version }) 'multiple-installations' $exe $m @{
+            inventoryComplete = (-not [string]::IsNullOrWhiteSpace($directVersion) -and -not [string]::IsNullOrWhiteSpace([string]$store.Version)); installType = 'multiple'
             installations = @(
-                [ordered]@{
-                    type        = 'msi'
-                    version     = $msiVersion
-                    path        = $msiExecutable
-                    displayName = $msiDisplayName
-                },
-                [ordered]@{
-                    type        = 'msix'
-                    version     = [string]$storePackage.Version
-                    path        = [string]$storePackage.InstallLocation
-                    packageName = [string]$storePackage.Name
-                }
+                [ordered]@{ type = 'msi'; version = $directVersion; path = $exe; displayName = [string](Get-PropertyValue $entry 'DisplayName') },
+                [ordered]@{ type = 'msix'; version = [string]$store.Version; path = [string]$store.InstallLocation; packageName = [string]$store.Name }
             )
         }
     }
-
-    if ($hasMsi) {
-        if (-not $msiVersion) {
-            $message = 'PAD MSI installation was detected, but its version could not be determined.'
-            Write-Missing 'PAD' $message
-
-            return New-UnusableRecord `
-                -Message $message `
-                -Source 'msi' `
-                -Path $msiExecutable
-        }
-
-        Write-Detected 'PAD' "$msiVersion (MSI)"
-
-        return New-InstalledRecord `
-            -Version $msiVersion `
-            -Source 'msi' `
-            -Path $msiExecutable `
-            -Extra @{
-                installType = 'msi'
-                displayName = $msiDisplayName
-                packageName = $null
-            }
+    if ($hasDirect) {
+        if (-not $directVersion) { $m = 'PAD MSI installation was detected, but its version is unknown.'; Write-Status WARN PAD $m; return New-InventoryRecord $true 'detected-version-unknown' $null 'msi' $exe $m @{ inventoryComplete = $false; installType = 'msi' } }
+        Write-Status OK PAD "$directVersion (MSI)"
+        return New-InventoryRecord $true 'detected' $directVersion 'msi' $exe $null @{ installType = 'msi'; displayName = [string](Get-PropertyValue $entry 'DisplayName'); packageName = $null }
     }
-
     if ($hasStore) {
-        $version = [string]$storePackage.Version
-
-        if ([string]::IsNullOrWhiteSpace($version)) {
-            $message = 'PAD Store/MSIX installation was detected, but its version is unavailable.'
-            Write-Missing 'PAD' $message
-
-            return New-UnusableRecord `
-                -Message $message `
-                -Source 'msix' `
-                -Path ([string]$storePackage.InstallLocation)
-        }
-
-        Write-Detected 'PAD' "$version (Microsoft Store/MSIX)"
-
-        return New-InstalledRecord `
-            -Version $version `
-            -Source 'msix' `
-            -Path ([string]$storePackage.InstallLocation) `
-            -Extra @{
-                installType = 'msix'
-                displayName = 'Power Automate'
-                packageName = [string]$storePackage.Name
-            }
+        $v = [string]$store.Version
+        if (-not $v) { $m = 'PAD Store/MSIX installation was detected, but its version is unknown.'; Write-Status WARN PAD $m; return New-InventoryRecord $true 'detected-version-unknown' $null 'msix' ([string]$store.InstallLocation) $m @{ inventoryComplete = $false; installType = 'msix' } }
+        Write-Status OK PAD "$v (Store/MSIX)"
+        return New-InventoryRecord $true 'detected' $v 'msix' ([string]$store.InstallLocation) $null @{ installType = 'msix'; displayName = 'Power Automate'; packageName = [string]$store.Name }
     }
-
-    $message = 'Power Automate for desktop was not detected as MSI or Microsoft Store/MSIX.'
-    Write-Missing 'PAD' $message
-    return New-MissingRecord -Message $message
+    $m = 'Power Automate for desktop was not detected.'; Write-Status MISS PAD $m; New-MissingRecord $m
 }
 
-# ==============================================================================
-# 10. UIPATH STUDIO + ASSISTANT
-# ==============================================================================
-
-function Get-UiPathVersionFromPath {
-    param(
-        [AllowNull()]
-        [string]$Path
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        return $null
-    }
-
-    # Connected UiPath Platform Installer clients are placed below a versioned
-    # directory. A real Community example is:
-    #   ...\UiPathPlatform\Studio\26.0.199-cloud.24445\UiPath.Studio.exe
-    #
-    # Search only path segments after "UiPathPlatform" so unrelated numeric
-    # folders elsewhere in a custom path cannot be mistaken for a client build.
-    $segments = @(
-        $Path -split '[\\/]+' |
-        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
-    )
-
-    if ($segments.Count -eq 0) {
-        return $null
-    }
-
-    $platformIndex = -1
-
-    for ($i = 0; $i -lt $segments.Count; $i++) {
-        if (
-            [string]::Equals(
-                [string]$segments[$i],
-                'UiPathPlatform',
-                [System.StringComparison]::OrdinalIgnoreCase
-            )
-        ) {
-            $platformIndex = $i
-            break
-        }
-    }
-
-    if ($platformIndex -lt 0) {
-        return $null
-    }
-
-    $versionPattern = '^(?<version>\d+(?:\.\d+){1,5}(?:[-+._][0-9A-Za-z][0-9A-Za-z._-]*)?)$'
-
-    for ($i = $platformIndex + 1; $i -lt $segments.Count; $i++) {
-        $segment = [string]$segments[$i]
-        $match = [regex]::Match(
-            $segment,
-            $versionPattern,
-            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
-        )
-
-        if ($match.Success) {
-            return [string]$match.Groups['version'].Value
-        }
-    }
-
-    return $null
-}
-
-function Get-UiPathExecutableVersionEvidence {
-    param(
-        [AllowNull()]
-        [string]$Path
-    )
-
-    $evidence = @()
-
-    if (
-        [string]::IsNullOrWhiteSpace($Path) -or
-        -not (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction SilentlyContinue)
-    ) {
-        return @()
-    }
-
-    $pathVersion = Get-UiPathVersionFromPath -Path $Path
-
-    if (-not [string]::IsNullOrWhiteSpace($pathVersion)) {
-        $evidence += [pscustomobject]@{
-            version  = $pathVersion
-            method   = 'UiPathPlatform versioned install directory'
-            priority = 500
-        }
-    }
-
-    try {
-        $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
-
-        foreach ($candidate in @(
-            [pscustomobject]@{
-                value    = [string]$versionInfo.ProductVersion
-                method   = 'executable ProductVersion metadata'
-                priority = 400
-            },
-            [pscustomobject]@{
-                value    = [string]$versionInfo.FileVersion
-                method   = 'executable FileVersion metadata'
-                priority = 350
-            }
-        )) {
-            if ([string]::IsNullOrWhiteSpace($candidate.value)) {
-                continue
-            }
-
-            $parsedVersion = Get-VersionToken -Text $candidate.value
-
-            if ([string]::IsNullOrWhiteSpace($parsedVersion)) {
-                $parsedVersion = $candidate.value.Trim()
-            }
-
-            if (-not [string]::IsNullOrWhiteSpace($parsedVersion)) {
-                $evidence += [pscustomobject]@{
-                    version  = $parsedVersion
-                    method   = $candidate.method
-                    priority = $candidate.priority
-                }
-            }
-        }
-    }
-    catch {
-        Write-Verbose "UiPath file metadata probe failed for '$Path': $($_.Exception.Message)"
-    }
-
-    # Some UiPath executables are managed assemblies while launchers can be
-    # native. AssemblyName is therefore a useful additional probe but is never
-    # required for detection.
-    try {
-        $assemblyName = [System.Reflection.AssemblyName]::GetAssemblyName($Path)
-
-        if ($null -ne $assemblyName -and $null -ne $assemblyName.Version) {
-            $assemblyVersion = [string]$assemblyName.Version
-
-            if (-not [string]::IsNullOrWhiteSpace($assemblyVersion)) {
-                $evidence += [pscustomobject]@{
-                    version  = $assemblyVersion
-                    method   = '.NET assembly version metadata'
-                    priority = 250
-                }
-            }
-        }
-    }
-    catch {
-        # Native executable or non-managed launcher. This is expected for some
-        # UiPath binaries and must never make the inventory fail.
-    }
-
-    # Deduplicate identical version/method pairs without assuming that the
-    # highest-looking semantic version is necessarily the active channel build.
-    $deduped = @(
-        $evidence |
-        Group-Object -Property version, method |
-        ForEach-Object {
-            $_.Group |
-                Sort-Object -Property priority -Descending |
-                Select-Object -First 1
-        }
-    )
-
-    return @($deduped)
-}
-
-function Get-UiPathRegistryEntriesDeep {
-    $results = @()
-
-    foreach ($registryPath in @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )) {
+function Get-PowerBiDesktopInventory {
+    $reg = @(Get-UninstallEntries '(?i)^(Microsoft )?Power BI Desktop\b' | Where-Object { [string](Get-PropertyValue $_ 'DisplayName') -notmatch '(?i)Report Server' })
+    $store = Get-AppxMatch 'Microsoft.MicrosoftPowerBIDesktop' '(?i)PowerBIDesktop'
+    $storeRoot = if ($store) { [string]$store.InstallLocation } else { $null }
+    if (-not $storeRoot -and $env:ProgramFiles) {
         try {
-            foreach ($entry in @(
-                Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $displayNameProperty = $_.PSObject.Properties['DisplayName']
-
-                    $null -ne $displayNameProperty -and
-                    -not [string]::IsNullOrWhiteSpace(
-                        [string]$displayNameProperty.Value
-                    ) -and
-                    [string]$displayNameProperty.Value -match '(?i)UiPath'
-                }
-            )) {
-                $results += $entry
-            }
+            $storeDir = Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles 'WindowsApps') -Directory -Filter 'Microsoft.MicrosoftPowerBIDesktop_*__8wekyb3d8bbwe' -ErrorAction Stop |
+                Where-Object { $_.Name -match '^Microsoft\.MicrosoftPowerBIDesktop_\d+(?:\.\d+){1,3}_(?:x64|x86|arm64)__8wekyb3d8bbwe$' } |
+                Sort-Object { [version](($_.Name -split '_')[1]) } -Descending | Select-Object -First 1
+            if ($storeDir) { $storeRoot = $storeDir.FullName }
         }
-        catch {
-            Write-Verbose "UiPath uninstall-registry probe failed at '$registryPath': $($_.Exception.Message)"
-        }
+        catch {}
     }
-
-    return @($results)
-}
-
-function Get-UiPathAppPathTargets {
-    $targets = @()
-
-    foreach ($executableName in @(
-        'UiPath.Studio.exe',
-        'UiPath.Studio.CommandLine.exe',
-        'UiPath.Assistant.exe',
-        'UiRobot.exe'
-    )) {
-        foreach ($registryPath in @(
-            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$executableName",
-            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\$executableName",
-            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$executableName"
-        )) {
-            try {
-                $key = Get-Item -LiteralPath $registryPath -ErrorAction Stop
-                $target = [string]$key.GetValue('')
-
-                if (
-                    -not [string]::IsNullOrWhiteSpace($target) -and
-                    (Test-Path -LiteralPath $target -PathType Leaf)
-                ) {
-                    $targets += [pscustomobject]@{
-                        path   = [System.IO.Path]::GetFullPath($target)
-                        source = 'Windows App Paths registry'
-                    }
-                }
-            }
-            catch {
-                # Missing App Paths keys are normal.
-            }
-        }
-    }
-
-    return @($targets)
-}
-
-function Get-UiPathShortcutTargets {
-    $targets = @()
-    $shortcutRoots = @()
-
-    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
-        $shortcutRoots += Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) {
-        $shortcutRoots += Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
-    }
-
-    $existingRoots = @(
-        $shortcutRoots |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Container -ErrorAction SilentlyContinue }
-    )
-
-    if ($existingRoots.Count -eq 0) {
-        return @()
-    }
-
-    $shell = $null
-
-    try {
-        $shell = New-Object -ComObject WScript.Shell
-
-        foreach ($root in $existingRoots) {
-            foreach ($shortcutFile in @(
-                Get-ChildItem `
-                    -LiteralPath $root `
-                    -Filter '*.lnk' `
-                    -File `
-                    -Recurse `
-                    -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match '(?i)UiPath' }
-            )) {
-                try {
-                    $shortcut = $shell.CreateShortcut($shortcutFile.FullName)
-                    $target = [string]$shortcut.TargetPath
-
-                    if (
-                        -not [string]::IsNullOrWhiteSpace($target) -and
-                        (Test-Path -LiteralPath $target -PathType Leaf)
-                    ) {
-                        $targets += [pscustomobject]@{
-                            path   = [System.IO.Path]::GetFullPath($target)
-                            source = 'Windows Start Menu shortcut'
-                        }
-                    }
-                }
-                catch {
-                    Write-Verbose "UiPath shortcut resolution failed for '$($shortcutFile.FullName)': $($_.Exception.Message)"
-                }
-            }
-        }
-    }
-    catch {
-        Write-Verbose "UiPath Start Menu shortcut probe unavailable: $($_.Exception.Message)"
-    }
-    finally {
-        if ($null -ne $shell) {
-            try {
-                [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
-            }
-            catch {
-                # Best-effort COM cleanup only.
-            }
-        }
-    }
-
-    return @($targets)
-}
-
-function Get-UiPathRunningProcessTargets {
-    $targets = @()
-
-    foreach ($processName in @(
-        'UiPath.Studio',
-        'UiPath.Assistant',
-        'UiRobot',
-        'UiPath.Executor'
-    )) {
+    $isStorePath = {
+        param([string]$Path)
+        if (-not $Path) { return $false }
+        if ($Path -match '(?i)[\\/]WindowsApps[\\/]') { return $true }
+        if (-not $storeRoot) { return $false }
         try {
-            foreach ($process in @(Get-Process -Name $processName -ErrorAction SilentlyContinue)) {
-                try {
-                    $target = [string]$process.Path
-
-                    if (
-                        -not [string]::IsNullOrWhiteSpace($target) -and
-                        (Test-Path -LiteralPath $target -PathType Leaf)
-                    ) {
-                        $targets += [pscustomobject]@{
-                            path   = [System.IO.Path]::GetFullPath($target)
-                            source = 'running process executable path'
-                        }
-                    }
-                }
-                catch {
-                    # Process path can be inaccessible depending on permissions.
-                }
-            }
+            $p = [IO.Path]::GetFullPath($Path); $r = [IO.Path]::GetFullPath($storeRoot).TrimEnd([char[]]@('\', '/'))
+            $p -ieq $r -or $p.StartsWith($r + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
         }
-        catch {
-            # Process not running or inaccessible. Neither is an inventory error.
-        }
+        catch { $false }
     }
-
-    return @($targets)
-}
-
-function Get-UiPathCandidateRole {
-    param(
-        [AllowNull()]
-        [string]$Path
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        return $null
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    $add = {
+        param([AllowNull()][string]$Path, [string]$Source)
+        if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction SilentlyContinue)) { return }
+        try { $full = [IO.Path]::GetFullPath($Path) } catch { return }
+        if ([IO.Path]::GetFileName($full) -ine 'PBIDesktop.exe' -or (& $isStorePath $full)) { return }
+        if (-not ($candidates | Where-Object { $_.path -ieq $full })) { $candidates.Add([pscustomobject]@{ path = $full; source = $Source }) }
     }
-
-    switch -Regex ([System.IO.Path]::GetFileName($Path)) {
-        '^UiPath\.Studio\.exe$'             { return 'studio' }
-        '^UiPath\.Studio\.CommandLine\.exe$' { return 'studioCommandLine' }
-        '^UiPath\.Assistant\.exe$'          { return 'assistant' }
-        '^UiRobot\.exe$'                     { return 'robot' }
-        '^UiPath\.Connected\.Updater\.App\.exe$' { return 'updater' }
-        default                              { return $null }
-    }
-}
-
-function New-UiPathExecutableCandidate {
-    param(
-        [AllowNull()]
-        [string]$Path,
-
-        [AllowNull()]
-        [string]$DiscoverySource
-    )
-
-    if (
-        [string]::IsNullOrWhiteSpace($Path) -or
-        -not (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction SilentlyContinue)
-    ) {
-        return $null
-    }
-
+    $storeProcessExe = $null
     try {
-        $fullPath = [System.IO.Path]::GetFullPath($Path)
-        $fileInfo = Get-Item -LiteralPath $fullPath -ErrorAction Stop
-        $role = Get-UiPathCandidateRole -Path $fullPath
-
-        if ([string]::IsNullOrWhiteSpace($role)) {
-            return $null
-        }
-
-        $versionEvidence = @(Get-UiPathExecutableVersionEvidence -Path $fullPath)
-        $bestVersionEvidence = $null
-
-        if ($versionEvidence.Count -gt 0) {
-            $bestVersionEvidence = $versionEvidence |
-                Sort-Object -Property priority -Descending |
-                Select-Object -First 1
-        }
-
-        return [pscustomobject]@{
-            role             = $role
-            path             = $fullPath
-            discoverySource  = $DiscoverySource
-            pathVersion      = Get-UiPathVersionFromPath -Path $fullPath
-            version          = if ($null -ne $bestVersionEvidence) {
-                [string]$bestVersionEvidence.version
+        foreach ($p in @(Get-Process PBIDesktop -ErrorAction SilentlyContinue)) {
+            try {
+                $processPath = [string]$p.Path
+                if (& $isStorePath $processPath) { if (-not $storeProcessExe) { $storeProcessExe = $processPath } }
+                else { & $add $processPath 'running process' }
             }
-            else {
-                $null
-            }
-            versionMethod    = if ($null -ne $bestVersionEvidence) {
-                [string]$bestVersionEvidence.method
-            }
-            else {
-                $null
-            }
-            versionEvidence  = @($versionEvidence)
-            lastWriteTimeUtc = $fileInfo.LastWriteTimeUtc
+            catch {}
         }
     }
-    catch {
-        Write-Verbose "Unable to build UiPath executable candidate for '$Path': $($_.Exception.Message)"
-        return $null
+    catch {}
+    foreach ($entry in $reg) {
+        $name = [string](Get-PropertyValue $entry 'DisplayName'); $loc = [string](Get-PropertyValue $entry 'InstallLocation')
+        if ($loc) { & $add (Join-Path $loc 'bin\PBIDesktop.exe') "registry InstallLocation: $name"; & $add (Join-Path $loc 'PBIDesktop.exe') "registry InstallLocation: $name" }
+        & $add (Get-DisplayIconExecutable ([string](Get-PropertyValue $entry 'DisplayIcon')) '.+?PBIDesktop\.exe') "registry DisplayIcon: $name"
     }
-}
-
-function Select-BestUiPathExecutableCandidate {
-    param(
-        [AllowNull()]
-        [AllowEmptyCollection()]
-        [object[]]$Candidates = @(),
-
-        [AllowNull()]
-        [string[]]$PreferredRoles = @()
-    )
-
-    $safeCandidates = @(
-        $Candidates |
-        Where-Object { $null -ne $_ }
-    )
-
-    if ($safeCandidates.Count -eq 0) {
-        return $null
-    }
-
-    $ranked = @(
-        foreach ($candidate in $safeCandidates) {
-            $rolePriority = 0
-
-            for ($i = 0; $i -lt $PreferredRoles.Count; $i++) {
-                if (
-                    [string]::Equals(
-                        [string]$candidate.role,
-                        [string]$PreferredRoles[$i],
-                        [System.StringComparison]::OrdinalIgnoreCase
-                    )
-                ) {
-                    $rolePriority = 1000 - ($i * 100)
-                    break
-                }
-            }
-
-            $versionPriority = 0
-
-            if (-not [string]::IsNullOrWhiteSpace([string]$candidate.pathVersion)) {
-                $versionPriority += 500
-            }
-
-            if (-not [string]::IsNullOrWhiteSpace([string]$candidate.version)) {
-                $versionPriority += 250
-            }
-
-            $platformPriority = 0
-
-            if ([string]$candidate.path -match '(?i)[\\/]UiPathPlatform[\\/]') {
-                $platformPriority = 200
-            }
-
-            [pscustomobject]@{
-                candidate         = $candidate
-                rolePriority      = $rolePriority
-                versionPriority   = $versionPriority
-                platformPriority  = $platformPriority
-                lastWriteTimeUtc  = $candidate.lastWriteTimeUtc
-            }
-        }
-    )
-
-    $selection = $ranked |
-        Sort-Object `
-            @{ Expression = 'rolePriority'; Descending = $true },
-            @{ Expression = 'versionPriority'; Descending = $true },
-            @{ Expression = 'platformPriority'; Descending = $true },
-            @{ Expression = 'lastWriteTimeUtc'; Descending = $true } |
-        Select-Object -First 1
-
-    if ($null -eq $selection) {
-        return $null
-    }
-
-    return $selection.candidate
-}
-
-function Get-UiPathRegistryVersionFallback {
-    param(
-        [AllowEmptyCollection()]
-        [object[]]$RegistryEntries = @(),
-
-        [ValidateSet('studio', 'assistant', 'platform')]
-        [string]$Role
-    )
-
-    $namePattern = switch ($Role) {
-        'studio'    { '(?i)UiPath.*Studio|Studio.*UiPath' }
-        'assistant' { '(?i)UiPath.*Assistant|Assistant.*UiPath' }
-        'platform'  { '(?i)^UiPath\s+Platform(?:\s.*)?$|UiPath.*Platform.*Installer' }
-    }
-
-    $matches = @(
-        $RegistryEntries |
-        Where-Object {
-            $displayNameProperty = $_.PSObject.Properties['DisplayName']
-            $displayVersionProperty = $_.PSObject.Properties['DisplayVersion']
-
-            $null -ne $displayNameProperty -and
-            [string]$displayNameProperty.Value -match $namePattern -and
-            $null -ne $displayVersionProperty -and
-            -not [string]::IsNullOrWhiteSpace(
-                [string]$displayVersionProperty.Value
+    if ($env:ProgramFiles) { & $add (Join-Path $env:ProgramFiles 'Microsoft Power BI Desktop\bin\PBIDesktop.exe') 'known install root' }
+    if (${env:ProgramFiles(x86)}) { & $add (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Power BI Desktop\bin\PBIDesktop.exe') 'known x86 install root' }
+    $direct = $candidates | Select-Object -First 1; $entry = $reg | Sort-Object DisplayVersion -Descending | Select-Object -First 1
+    $directPath = if ($direct) { [string]$direct.path } else { [string](Get-PropertyValue $entry 'InstallLocation') }
+    $directVersion = if ($direct) { Get-FileVersion $direct.path } else { $null }; $directMethod = if ($directVersion) { 'PBIDesktop.exe metadata' } else { $null }
+    if (-not $directVersion) { $directVersion = [string](Get-PropertyValue $entry 'DisplayVersion'); if ($directVersion) { $directMethod = 'Windows uninstall registry' } }
+    $storeExe = $storeProcessExe
+    if (-not $storeExe -and $storeRoot) { $storeExe = Get-FirstExistingFile @((Join-Path $storeRoot 'bin\PBIDesktop.exe'), (Join-Path $storeRoot 'PBIDesktop.exe')) }
+    $storeVersion = if ($storeExe) { Get-FileVersion $storeExe } else { $null }; $storeMethod = if ($storeVersion) { 'PBIDesktop.exe metadata' } else { $null }
+    if (-not $storeVersion -and $store) { $storeVersion = [string]$store.Version; if ($storeVersion) { $storeMethod = 'Microsoft Store package' } }
+    if (-not $storeVersion -and $storeRoot -and $storeRoot -match '(?i)Microsoft\.MicrosoftPowerBIDesktop_(?<v>\d+(?:\.\d+){1,3})_') { $storeVersion = $Matches.v; $storeMethod = 'WindowsApps package directory' }
+    $hasDirect = $reg.Count -gt 0 -or $direct; $hasStore = $null -ne $store -or $storeExe -or $storeRoot
+    if ($hasDirect -and $hasStore) {
+        $m = 'Both direct and Microsoft Store/MSIX Power BI Desktop installations were detected.'; Write-Status WARN 'Power BI Desktop' $m
+        return New-InventoryRecord $true 'detected-with-warning' $(if ($directVersion) { $directVersion } else { $storeVersion }) 'multiple-installations' $directPath $m @{
+            inventoryComplete = (-not [string]::IsNullOrWhiteSpace($directVersion) -and -not [string]::IsNullOrWhiteSpace($storeVersion)); installType = 'multiple'
+            installations = @(
+                [ordered]@{ type = 'direct'; version = $directVersion; path = $directPath; displayName = [string](Get-PropertyValue $entry 'DisplayName'); versionMethod = $directMethod; discoverySource = $(if ($direct) { $direct.source } else { $null }) },
+                [ordered]@{ type = 'msix'; version = $storeVersion; path = $(if ($storeExe) { $storeExe } else { $storeRoot }); packageName = $(if ($store) { [string]$store.Name } else { 'Microsoft.MicrosoftPowerBIDesktop' }); versionMethod = $storeMethod }
             )
         }
-    )
-
-    if ($matches.Count -eq 0) {
-        return $null
     }
-
-    $entry = $matches | Select-Object -First 1
-    $displayName = [string]$entry.PSObject.Properties['DisplayName'].Value
-    $displayVersion = [string]$entry.PSObject.Properties['DisplayVersion'].Value
-
-    return [pscustomobject]@{
-        version     = $displayVersion.Trim()
-        method      = 'Windows uninstall registry'
-        displayName = $displayName
+    if ($hasDirect) {
+        $path = $directPath
+        if (-not $directVersion) { $m = 'Power BI Desktop direct installation was detected, but its version is unknown.'; Write-Status WARN 'Power BI Desktop' $m; return New-InventoryRecord $true 'detected-version-unknown' $null 'direct-installation' $path $m @{ inventoryComplete = $false; installType = 'direct' } }
+        Write-Status OK 'Power BI Desktop' "$directVersion (direct)"
+        return New-InventoryRecord $true 'detected' $directVersion 'direct-installation' $path $null @{ installType = 'direct'; displayName = [string](Get-PropertyValue $entry 'DisplayName'); versionMethod = $directMethod; discoverySource = $(if ($direct) { $direct.source } else { $null }) }
     }
+    if ($hasStore) {
+        $path = if ($storeExe) { $storeExe } else { $storeRoot }
+        if (-not $storeVersion) { $m = 'Power BI Desktop Store/MSIX installation was detected, but its version is unknown.'; Write-Status WARN 'Power BI Desktop' $m; return New-InventoryRecord $true 'detected-version-unknown' $null 'msix' $path $m @{ inventoryComplete = $false; installType = 'msix' } }
+        Write-Status OK 'Power BI Desktop' "$storeVersion (Store/MSIX)"
+        return New-InventoryRecord $true 'detected' $storeVersion 'msix' $path $null @{ installType = 'msix'; packageName = $(if ($store) { [string]$store.Name } else { 'Microsoft.MicrosoftPowerBIDesktop' }); versionMethod = $storeMethod }
+    }
+    $m = 'Power BI Desktop was not detected.'; Write-Status MISS 'Power BI Desktop' $m; New-MissingRecord $m
+}
+
+function Get-UiPathRole {
+    param([string]$Path)
+    switch -Regex ([IO.Path]::GetFileName($Path)) {
+        '^UiPath\.Studio\.exe$' { 'studio'; break }
+        '^UiPath\.Studio\.CommandLine\.exe$' { 'studioCommandLine'; break }
+        '^UiPath\.Assistant\.exe$' { 'assistant'; break }
+        '^UiRobot\.exe$' { 'robot'; break }
+        '^UiPath\.Connected\.Updater\.App\.exe$' { 'updater'; break }
+        default { $null }
+    }
+}
+
+function Get-UiPathPathVersion {
+    param([string]$Path)
+    $parts = @($Path -split '[\\/]+' | Where-Object { $_ })
+    $seen = $false
+    foreach ($part in $parts) {
+        if ($part -ieq 'UiPathPlatform') { $seen = $true; continue }
+        if ($seen -and $part -match '^(?<version>\d+(?:\.\d+){1,5}(?:[-+._][0-9A-Za-z][0-9A-Za-z._-]*)?)$') { return $Matches.version }
+    }
+    $null
+}
+
+function Get-UiPathCandidate {
+    param([string]$Path, [string]$Source)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction SilentlyContinue)) { return $null }
+    try { $full = [IO.Path]::GetFullPath($Path); $role = Get-UiPathRole $full; if (-not $role) { return $null } } catch { return $null }
+    $version = Get-UiPathPathVersion $full; $method = if ($version) { 'UiPathPlatform install directory' } else { $null }
+    if (-not $version) { $version = Get-FileVersion $full; if ($version) { $method = 'executable metadata' } }
+    [pscustomobject]@{ role = $role; path = $full; version = $version; versionMethod = $method; discoverySource = $Source; lastWriteTimeUtc = (Get-Item -LiteralPath $full).LastWriteTimeUtc }
+}
+
+function Select-UiPathCandidate {
+    param([object[]]$Candidates, [string[]]$Roles)
+    @($Candidates | Where-Object { $_.role -in $Roles }) | Sort-Object @{ Expression = { $i = [array]::IndexOf($Roles, [string]$_.role); if ($i -lt 0) { 0 } else { 100 - $i } }; Descending = $true }, @{ Expression = { if ($_.version) { 1 } else { 0 } }; Descending = $true }, @{ Expression = { if ($_.path -match '(?i)[\\/]UiPathPlatform[\\/]') { 1 } else { 0 } }; Descending = $true }, @{ Expression = 'lastWriteTimeUtc'; Descending = $true } | Select-Object -First 1
+}
+
+function Get-UiPathRegistryVersion {
+    param([object[]]$Entries, [string]$Pattern)
+    $e = $Entries | Where-Object { [string](Get-PropertyValue $_ 'DisplayName') -match $Pattern -and [string](Get-PropertyValue $_ 'DisplayVersion') } | Select-Object -First 1
+    if ($e) { [pscustomobject]@{ version = ([string](Get-PropertyValue $e 'DisplayVersion')).Trim(); displayName = [string](Get-PropertyValue $e 'DisplayName'); method = 'Windows uninstall registry' } }
 }
 
 function Get-UiPathInventory {
-    # This detector intentionally uses several independent Windows evidence
-    # sources. No one source is trusted as mandatory because UiPath currently
-    # supports both classic MSI installs and the Connected/Platform Installer,
-    # including per-user, per-machine, custom-path, and automatically updated
-    # versioned client directories.
-
-    $registryEntries = @(Get-UiPathRegistryEntriesDeep)
-    $searchRootMap = [ordered]@{}
-    $candidateMap = [ordered]@{}
-
-    function Add-UiPathSearchRootInternal {
-        param(
-            [AllowNull()]
-            [string]$Path,
-
-            [AllowNull()]
-            [string]$Source
-        )
-
-        if ([string]::IsNullOrWhiteSpace($Path)) {
-            return
+    $reg = @(Get-UninstallEntries '(?i)UiPath')
+    $roots = [ordered]@{}; $map = [ordered]@{}
+    $addRoot = {
+        param([string]$Path, [string]$Source)
+        if (-not $Path) { return }
+        try { $full = [IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\', '/')) } catch { return }
+        if (Test-Path -LiteralPath $full -PathType Container -ErrorAction SilentlyContinue) { $key = $full.ToLowerInvariant(); if (-not $roots.Contains($key)) { $roots[$key] = [pscustomobject]@{ path = $full; source = $Source } } }
+    }
+    $addCandidate = {
+        param([string]$Path, [string]$Source)
+        $c = Get-UiPathCandidate $Path $Source
+        if ($c) { $key = $c.path.ToLowerInvariant(); if (-not $map.Contains($key)) { $map[$key] = $c } }
+    }
+    foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ($base) { & $addRoot (Join-Path $base 'UiPathPlatform') 'known root'; & $addRoot (Join-Path $base 'UiPath') 'known root' }
+    }
+    if ($env:LOCALAPPDATA) { foreach ($rel in 'Programs\UiPathPlatform', 'Programs\UiPath', 'UiPathPlatform', 'UiPath') { & $addRoot (Join-Path $env:LOCALAPPDATA $rel) 'known per-user root' } }
+    if ($env:ProgramData) { & $addRoot (Join-Path $env:ProgramData 'UiPath') 'known ProgramData root' }
+    foreach ($entry in $reg) {
+        $name = [string](Get-PropertyValue $entry 'DisplayName'); $loc = [string](Get-PropertyValue $entry 'InstallLocation'); if ($loc) { & $addRoot $loc "registry: $name" }
+        foreach ($prop in 'DisplayIcon', 'UninstallString', 'QuietUninstallString') {
+            $path = Get-DisplayIconExecutable ([string](Get-PropertyValue $entry $prop))
+            if ($path -and (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction SilentlyContinue)) {
+                $role = Get-UiPathRole $path
+                if ($role -or $path -match '(?i)[\\/]UiPath(?:Platform)?[\\/]') { & $addRoot (Split-Path $path -Parent) "registry ${prop}: $name" }
+                if ($role) { & $addCandidate $path "registry ${prop}: $name" }
+            }
         }
-
+    }
+    $exeNames = @('UiPath.Studio.exe', 'UiPath.Studio.CommandLine.exe', 'UiPath.Assistant.exe', 'UiRobot.exe', 'UiPath.Connected.Updater.App.exe')
+    foreach ($exe in $exeNames) {
+        foreach ($rp in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$exe", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\$exe", "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$exe")) {
+            try { $key = Get-Item -LiteralPath $rp -ErrorAction Stop; $path = [string]$key.GetValue(''); if ($path) { & $addCandidate $path 'Windows App Paths'; & $addRoot (Split-Path $path -Parent) 'Windows App Paths' } } catch {}
+        }
+    }
+    foreach ($processName in 'UiPath.Studio', 'UiPath.Assistant', 'UiRobot', 'UiPath.Executor') {
+        try { foreach ($p in @(Get-Process $processName -ErrorAction SilentlyContinue)) { try { if ($p.Path) { & $addCandidate ([string]$p.Path) 'running process'; & $addRoot (Split-Path ([string]$p.Path) -Parent) 'running process' } } catch {} } } catch {}
+    }
+    $shortcutRoots = @()
+    if ($env:APPDATA) { $shortcutRoots += Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs' }
+    if ($env:ProgramData) { $shortcutRoots += Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs' }
+    try {
+        $shell = New-Object -ComObject WScript.Shell
         try {
-            $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd(
-                [char[]]@('\', '/')
-            )
-        }
-        catch {
-            Write-Verbose "Ignoring invalid UiPath search root '$Path': $($_.Exception.Message)"
-            return
-        }
-
-        if (-not (Test-Path -LiteralPath $fullPath -PathType Container -ErrorAction SilentlyContinue)) {
-            return
-        }
-
-        $key = $fullPath.ToLowerInvariant()
-
-        if (-not $searchRootMap.Contains($key)) {
-            $searchRootMap[$key] = [pscustomobject]@{
-                path   = $fullPath
-                source = $Source
-            }
-        }
-    }
-
-    function Add-UiPathCandidateInternal {
-        param(
-            [AllowNull()]
-            [string]$Path,
-
-            [AllowNull()]
-            [string]$Source
-        )
-
-        $candidate = New-UiPathExecutableCandidate `
-            -Path $Path `
-            -DiscoverySource $Source
-
-        if ($null -eq $candidate) {
-            return
-        }
-
-        $key = ([string]$candidate.path).ToLowerInvariant()
-
-        if (-not $candidateMap.Contains($key)) {
-            $candidateMap[$key] = $candidate
-        }
-    }
-
-    # 1. Official/default classic and Connected Platform Installer roots.
-    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
-        Add-UiPathSearchRootInternal `
-            -Path (Join-Path $env:ProgramFiles 'UiPathPlatform') `
-            -Source 'known per-machine UiPathPlatform root'
-
-        Add-UiPathSearchRootInternal `
-            -Path (Join-Path $env:ProgramFiles 'UiPath') `
-            -Source 'known per-machine classic UiPath root'
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
-        Add-UiPathSearchRootInternal `
-            -Path (Join-Path ${env:ProgramFiles(x86)} 'UiPathPlatform') `
-            -Source 'known 32-bit per-machine UiPathPlatform root'
-
-        Add-UiPathSearchRootInternal `
-            -Path (Join-Path ${env:ProgramFiles(x86)} 'UiPath') `
-            -Source 'known 32-bit classic UiPath root'
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-        foreach ($relativePath in @(
-            'Programs\UiPathPlatform',
-            'Programs\UiPath',
-            'UiPathPlatform',
-            'UiPath'
-        )) {
-            Add-UiPathSearchRootInternal `
-                -Path (Join-Path $env:LOCALAPPDATA $relativePath) `
-                -Source 'known per-user UiPath root'
-        }
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) {
-        Add-UiPathSearchRootInternal `
-            -Path (Join-Path $env:ProgramData 'UiPath') `
-            -Source 'known ProgramData UiPath root'
-    }
-
-    # 2. Uninstall registry evidence: install location, display icon, and paths
-    # discoverable from uninstall strings. This covers custom installation paths.
-    foreach ($entry in $registryEntries) {
-        $displayName = $null
-        $displayNameProperty = $entry.PSObject.Properties['DisplayName']
-
-        if ($null -ne $displayNameProperty) {
-            $displayName = [string]$displayNameProperty.Value
-        }
-
-        foreach ($propertyName in @('InstallLocation')) {
-            $property = $entry.PSObject.Properties[$propertyName]
-
-            if (
-                $null -ne $property -and
-                -not [string]::IsNullOrWhiteSpace([string]$property.Value)
-            ) {
-                Add-UiPathSearchRootInternal `
-                    -Path ([string]$property.Value) `
-                    -Source "uninstall registry: $displayName"
-            }
-        }
-
-        foreach ($propertyName in @('DisplayIcon', 'UninstallString', 'QuietUninstallString')) {
-            $property = $entry.PSObject.Properties[$propertyName]
-
-            if (
-                $null -eq $property -or
-                [string]::IsNullOrWhiteSpace([string]$property.Value)
-            ) {
-                continue
-            }
-
-            $rawValue = [string]$property.Value
-            $possiblePath = $null
-
-            $quotedMatch = [regex]::Match($rawValue, '^\s*"(?<path>[^"]+)"')
-
-            if ($quotedMatch.Success) {
-                $possiblePath = [string]$quotedMatch.Groups['path'].Value
-            }
-            else {
-                $exeMatch = [regex]::Match(
-                    $rawValue,
-                    '(?i)^(?<path>.+?\.exe)(?:\s|,|$)'
-                )
-
-                if ($exeMatch.Success) {
-                    $possiblePath = [string]$exeMatch.Groups['path'].Value
-                }
-            }
-
-            if (
-                -not [string]::IsNullOrWhiteSpace($possiblePath) -and
-                (Test-Path -LiteralPath $possiblePath -PathType Leaf -ErrorAction SilentlyContinue)
-            ) {
-                $possibleRole = Get-UiPathCandidateRole -Path $possiblePath
-                $pathLooksUiPathSpecific = (
-                    $possiblePath -match '(?i)[\\/]UiPath(?:Platform)?[\\/]'
-                )
-
-                # Do not recurse generic installer hosts such as
-                # C:\Windows\System32\msiexec.exe. Only add a registry-derived
-                # parent when the path itself is UiPath-specific or is one of the
-                # exact client executables we know how to classify.
-                if (
-                    -not [string]::IsNullOrWhiteSpace($possibleRole) -or
-                    $pathLooksUiPathSpecific
-                ) {
-                    Add-UiPathSearchRootInternal `
-                        -Path (Split-Path -Path $possiblePath -Parent) `
-                        -Source "uninstall registry ${propertyName}: $displayName"
-                }
-
-                if (-not [string]::IsNullOrWhiteSpace($possibleRole)) {
-                    Add-UiPathCandidateInternal `
-                        -Path $possiblePath `
-                        -Source "uninstall registry ${propertyName}: $displayName"
+            foreach ($root in $shortcutRoots | Where-Object { Test-Path -LiteralPath $_ -PathType Container -ErrorAction SilentlyContinue }) {
+                foreach ($lnk in @(Get-ChildItem -LiteralPath $root -Filter '*.lnk' -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)UiPath' })) {
+                    try { $path = [string]$shell.CreateShortcut($lnk.FullName).TargetPath; if ($path) { & $addCandidate $path 'Start Menu shortcut'; & $addRoot (Split-Path $path -Parent) 'Start Menu shortcut' } } catch {}
                 }
             }
         }
+        finally { try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) } catch {} }
     }
-
-    # 3. Windows App Paths registry can point directly to registered executables.
-    foreach ($target in @(Get-UiPathAppPathTargets)) {
-        Add-UiPathCandidateInternal -Path $target.path -Source $target.source
-        Add-UiPathSearchRootInternal `
-            -Path (Split-Path -Path $target.path -Parent) `
-            -Source $target.source
-    }
-
-    # 4. Start Menu shortcuts are another independent custom-path locator.
-    foreach ($target in @(Get-UiPathShortcutTargets)) {
-        Add-UiPathCandidateInternal -Path $target.path -Source $target.source
-        Add-UiPathSearchRootInternal `
-            -Path (Split-Path -Path $target.path -Parent) `
-            -Source $target.source
-    }
-
-    # 5. A currently running Studio/Assistant/Robot gives an authoritative
-    # executable path without requiring any installer metadata.
-    foreach ($target in @(Get-UiPathRunningProcessTargets)) {
-        Add-UiPathCandidateInternal -Path $target.path -Source $target.source
-        Add-UiPathSearchRootInternal `
-            -Path (Split-Path -Path $target.path -Parent) `
-            -Source $target.source
-    }
-
-    # 6. Recursively search only UiPath-specific roots, never the entire drive.
-    # Exact executable names keep this bounded and avoid collecting unrelated
-    # package/cache files.
-    $executableNames = @(
-        'UiPath.Studio.exe',
-        'UiPath.Studio.CommandLine.exe',
-        'UiPath.Assistant.exe',
-        'UiRobot.exe',
-        'UiPath.Connected.Updater.App.exe'
-    )
-
-    foreach ($searchRootEntry in @($searchRootMap.Values)) {
-        $root = [string]$searchRootEntry.path
-        $rootSource = [string]$searchRootEntry.source
-
-        Write-Verbose "UiPath search root: $root ($rootSource)"
-
-        foreach ($executableName in $executableNames) {
-            try {
-                foreach ($file in @(
-                    Get-ChildItem `
-                        -LiteralPath $root `
-                        -Filter $executableName `
-                        -File `
-                        -Recurse `
-                        -ErrorAction SilentlyContinue
-                )) {
-                    Add-UiPathCandidateInternal `
-                        -Path $file.FullName `
-                        -Source "filesystem search: $rootSource"
-                }
-            }
-            catch {
-                Write-Verbose "UiPath filesystem probe failed under '$root' for '$executableName': $($_.Exception.Message)"
-            }
+    catch { Write-Verbose "UiPath shortcut probe unavailable: $($_.Exception.Message)" }
+    foreach ($root in @($roots.Values)) {
+        foreach ($exe in $exeNames) {
+            try { foreach ($f in @(Get-ChildItem -LiteralPath $root.path -Filter $exe -File -Recurse -ErrorAction SilentlyContinue)) { & $addCandidate $f.FullName "filesystem: $($root.source)" } } catch {}
         }
     }
-
-    $allCandidates = @($candidateMap.Values)
-
-    foreach ($candidate in $allCandidates) {
-        $versionLabel = if (
-            [string]::IsNullOrWhiteSpace([string]$candidate.version)
-        ) {
-            '<version unknown>'
-        }
-        else {
-            [string]$candidate.version
-        }
-
-        Write-Verbose (
-            "UiPath candidate [$($candidate.role)] $($candidate.path) => " +
-            "$versionLabel via $($candidate.versionMethod); source=$($candidate.discoverySource)"
-        )
+    $all = @($map.Values)
+    $studio = Select-UiPathCandidate $all @('studio', 'studioCommandLine'); $assistant = Select-UiPathCandidate $all @('assistant'); $robot = Select-UiPathCandidate $all @('robot'); $updater = Select-UiPathCandidate $all @('updater')
+    $studioReg = Get-UiPathRegistryVersion $reg '(?i)UiPath.*Studio|Studio.*UiPath'; $assistantReg = Get-UiPathRegistryVersion $reg '(?i)UiPath.*Assistant|Assistant.*UiPath'; $platformReg = Get-UiPathRegistryVersion $reg '(?i)^UiPath\s+Platform(?:\s.*)?$|UiPath.*Platform.*Installer'
+    $studioInstalled = $null -ne $studio -or $null -ne $studioReg; $assistantInstalled = $null -ne $assistant -or $null -ne $assistantReg
+    $studioVersion = if ($studio -and $studio.version) { [string]$studio.version } elseif ($studioReg) { [string]$studioReg.version } elseif ($studioInstalled -and $platformReg) { [string]$platformReg.version } else { $null }
+    $studioMethod = if ($studio -and $studio.version) { [string]$studio.versionMethod } elseif ($studioReg) { $studioReg.method } elseif ($studioInstalled -and $platformReg) { 'UiPath Platform uninstall registry' } else { $null }
+    $assistantVersion = if ($assistant -and $assistant.version) { [string]$assistant.version } elseif ($assistantReg) { [string]$assistantReg.version } else { $null }
+    $assistantMethod = if ($assistant -and $assistant.version) { [string]$assistant.versionMethod } elseif ($assistantReg) { $assistantReg.method } else { $null }
+    $anything = $studioInstalled -or $assistantInstalled -or $robot -or $updater -or $reg.Count
+    if (-not $anything) {
+        $m = 'UiPath Studio/Assistant was not detected.'; Write-Status MISS UiPath $m
+        return New-InventoryRecord $false 'missing' $null 'not-detected' $null $m @{ inventoryComplete = $false; studio = [ordered]@{ installed = $false; version = $null; path = $null }; assistant = [ordered]@{ installed = $false; version = $null; path = $null } }
     }
-
-    $studioCandidates = @(
-        $allCandidates |
-        Where-Object { $_.role -in @('studio', 'studioCommandLine') }
-    )
-
-    $assistantCandidates = @(
-        $allCandidates |
-        Where-Object { $_.role -eq 'assistant' }
-    )
-
-    $robotCandidates = @(
-        $allCandidates |
-        Where-Object { $_.role -eq 'robot' }
-    )
-
-    $updaterCandidates = @(
-        $allCandidates |
-        Where-Object { $_.role -eq 'updater' }
-    )
-
-    $studioSelection = Select-BestUiPathExecutableCandidate `
-        -Candidates $studioCandidates `
-        -PreferredRoles @('studio', 'studioCommandLine')
-
-    $assistantSelection = Select-BestUiPathExecutableCandidate `
-        -Candidates $assistantCandidates `
-        -PreferredRoles @('assistant')
-
-    $robotSelection = Select-BestUiPathExecutableCandidate `
-        -Candidates $robotCandidates `
-        -PreferredRoles @('robot')
-
-    $updaterSelection = Select-BestUiPathExecutableCandidate `
-        -Candidates $updaterCandidates `
-        -PreferredRoles @('updater')
-
-    $studioRegistryFallback = Get-UiPathRegistryVersionFallback `
-        -RegistryEntries $registryEntries `
-        -Role studio
-
-    $assistantRegistryFallback = Get-UiPathRegistryVersionFallback `
-        -RegistryEntries $registryEntries `
-        -Role assistant
-
-    $platformRegistryFallback = Get-UiPathRegistryVersionFallback `
-        -RegistryEntries $registryEntries `
-        -Role platform
-
-    $studioInstalled = $null -ne $studioSelection
-    $assistantInstalled = $null -ne $assistantSelection
-
-    # If no executable was accessible but Windows explicitly registers Studio,
-    # preserve that as installation evidence instead of incorrectly reporting a
-    # complete miss.
-    if (-not $studioInstalled -and $null -ne $studioRegistryFallback) {
-        $studioInstalled = $true
-    }
-
-    if (-not $assistantInstalled -and $null -ne $assistantRegistryFallback) {
-        $assistantInstalled = $true
-    }
-
-    $studioVersion = $null
-    $studioVersionMethod = $null
-    $studioPath = $null
-    $studioDiscoverySource = $null
-
-    if ($null -ne $studioSelection) {
-        $studioPath = [string]$studioSelection.path
-        $studioDiscoverySource = [string]$studioSelection.discoverySource
-        $studioVersion = [string]$studioSelection.version
-        $studioVersionMethod = [string]$studioSelection.versionMethod
-    }
-
-    if (
-        [string]::IsNullOrWhiteSpace($studioVersion) -and
-        $null -ne $studioRegistryFallback
-    ) {
-        $studioVersion = [string]$studioRegistryFallback.version
-        $studioVersionMethod = [string]$studioRegistryFallback.method
-    }
-
-    # The Platform Installer DisplayVersion is a final last-resort version clue
-    # only when Studio is otherwise positively detected. It is intentionally
-    # lower confidence than a client executable/path or Studio-specific entry.
-    if (
-        $studioInstalled -and
-        [string]::IsNullOrWhiteSpace($studioVersion) -and
-        $null -ne $platformRegistryFallback
-    ) {
-        $studioVersion = [string]$platformRegistryFallback.version
-        $studioVersionMethod = 'UiPath Platform uninstall registry (last-resort fallback)'
-    }
-
-    $assistantVersion = $null
-    $assistantVersionMethod = $null
-    $assistantPath = $null
-    $assistantDiscoverySource = $null
-
-    if ($null -ne $assistantSelection) {
-        $assistantPath = [string]$assistantSelection.path
-        $assistantDiscoverySource = [string]$assistantSelection.discoverySource
-        $assistantVersion = [string]$assistantSelection.version
-        $assistantVersionMethod = [string]$assistantSelection.versionMethod
-    }
-
-    if (
-        [string]::IsNullOrWhiteSpace($assistantVersion) -and
-        $null -ne $assistantRegistryFallback
-    ) {
-        $assistantVersion = [string]$assistantRegistryFallback.version
-        $assistantVersionMethod = [string]$assistantRegistryFallback.method
-    }
-
-    $anythingDetected = (
-        $studioInstalled -or
-        $assistantInstalled -or
-        $null -ne $robotSelection -or
-        $null -ne $updaterSelection -or
-        $registryEntries.Count -gt 0
-    )
-
-    if (-not $anythingDetected) {
-        $message = 'UiPath Studio/Assistant was not detected after registry, App Paths, Start Menu, process, and filesystem probes.'
-        Write-Missing 'UiPath' $message
-
-        return [ordered]@{
-            installed         = $false
-            inventoryComplete = $false
-            status            = 'missing'
-            version           = $null
-            source            = 'not-detected'
-            path              = $null
-            message           = $message
-            studio            = [ordered]@{
-                installed       = $false
-                version         = $null
-                path            = $null
-                versionMethod   = $null
-                discoverySource = $null
-                candidateCount  = 0
-            }
-            assistant = [ordered]@{
-                installed       = $false
-                version         = $null
-                path            = $null
-                versionMethod   = $null
-                discoverySource = $null
-                candidateCount  = 0
-            }
-        }
-    }
-
-    $installationSource = 'windows-installation'
-
-    if (
-        ($studioPath -and $studioPath -match '(?i)[\\/]UiPathPlatform[\\/]') -or
-        ($assistantPath -and $assistantPath -match '(?i)[\\/]UiPathPlatform[\\/]') -or
-        $null -ne $updaterSelection -or
-        $null -ne $platformRegistryFallback
-    ) {
-        $installationSource = 'uipath-platform-installer'
-    }
-
+    $source = if (($studio -and $studio.path -match '(?i)[\\/]UiPathPlatform[\\/]') -or ($assistant -and $assistant.path -match '(?i)[\\/]UiPathPlatform[\\/]') -or $updater -or $platformReg) { 'uipath-platform-installer' } else { 'windows-installation' }
     if (-not $studioInstalled) {
-        $message = 'UiPath components were detected, but UiPath Studio itself was not found.'
-        Write-WarningLine 'UiPath Studio' $message
-
-        return [ordered]@{
-            installed         = $false
-            inventoryComplete = $false
-            status            = 'studio-missing'
-            version           = $null
-            source            = $installationSource
-            path              = $null
-            message           = $message
-            studio            = [ordered]@{
-                installed       = $false
-                version         = $null
-                path            = $null
-                versionMethod   = $null
-                discoverySource = $null
-                candidateCount  = $studioCandidates.Count
-            }
-            assistant = [ordered]@{
-                installed       = $assistantInstalled
-                version         = $assistantVersion
-                path            = $assistantPath
-                versionMethod   = $assistantVersionMethod
-                discoverySource = $assistantDiscoverySource
-                candidateCount  = $assistantCandidates.Count
-            }
-        }
+        $m = 'UiPath components were detected, but Studio was not found.'; Write-Status WARN 'UiPath Studio' $m
+        return New-InventoryRecord $false 'studio-missing' $null $source $null $m @{ inventoryComplete = $false; studio = [ordered]@{ installed = $false; version = $null; path = $null }; assistant = [ordered]@{ installed = $assistantInstalled; version = $assistantVersion; path = $(if ($assistant) { $assistant.path } else { $null }); versionMethod = $assistantMethod } }
     }
-
-    if ([string]::IsNullOrWhiteSpace($studioVersion)) {
-        $message = 'UiPath Studio was found, but no usable version was available from its versioned path, executable metadata, assembly metadata, or Windows registry.'
-        Write-WarningLine 'UiPath Studio' $message
-
-        return [ordered]@{
-            installed         = $true
-            inventoryComplete = $false
-            status            = 'detected-version-unknown'
-            version           = $null
-            source            = $installationSource
-            path              = $studioPath
-            message           = $message
-            studio            = [ordered]@{
-                installed       = $true
-                version         = $null
-                path            = $studioPath
-                versionMethod   = $null
-                discoverySource = $studioDiscoverySource
-                candidateCount  = $studioCandidates.Count
-            }
-            assistant = [ordered]@{
-                installed       = $assistantInstalled
-                version         = $assistantVersion
-                path            = $assistantPath
-                versionMethod   = $assistantVersionMethod
-                discoverySource = $assistantDiscoverySource
-                candidateCount  = $assistantCandidates.Count
-            }
-        }
+    if (-not $studioVersion) {
+        $m = 'UiPath Studio was found, but its version is unknown.'; Write-Status WARN 'UiPath Studio' $m
+        return New-InventoryRecord $true 'detected-version-unknown' $null $source $(if ($studio) { $studio.path } else { $null }) $m @{ inventoryComplete = $false; studio = [ordered]@{ installed = $true; version = $null; path = $(if ($studio) { $studio.path } else { $null }) }; assistant = [ordered]@{ installed = $assistantInstalled; version = $assistantVersion; path = $(if ($assistant) { $assistant.path } else { $null }) } }
     }
-
-    Write-Detected 'UiPath Studio' "$studioVersion ($studioVersionMethod)"
-
-    if ($assistantInstalled) {
-        if (-not [string]::IsNullOrWhiteSpace($assistantVersion)) {
-            Write-Detected 'UiPath Assistant' "$assistantVersion ($assistantVersionMethod)"
-        }
-        else {
-            Write-WarningLine `
-                'UiPath Assistant' `
-                'installed, but version could not be determined'
-        }
-    }
-    else {
-        Write-WarningLine `
-            'UiPath Assistant' `
-            'Studio detected, but Assistant executable/registration was not found.'
-    }
-
-    $uiPathInventoryComplete = (
-        $studioInstalled -and
-        -not [string]::IsNullOrWhiteSpace($studioVersion) -and
-        $assistantInstalled -and
-        -not [string]::IsNullOrWhiteSpace($assistantVersion)
-    )
-
-    $uiPathStatus = if ($uiPathInventoryComplete) {
-        'detected'
-    }
-    else {
-        'detected-partial'
-    }
-
-    $uiPathMessage = if ($uiPathInventoryComplete) {
-        $null
-    }
-    elseif (-not $assistantInstalled) {
-        'UiPath Studio is detected, but Assistant is missing.'
-    }
-    else {
-        'UiPath Studio and Assistant are detected, but Assistant version extraction is incomplete.'
-    }
-
-    return [ordered]@{
-        installed         = $true
-        inventoryComplete = $uiPathInventoryComplete
-        status            = $uiPathStatus
-        version           = $studioVersion
-        source            = $installationSource
-        path              = $studioPath
-        message           = $uiPathMessage
-        studio            = [ordered]@{
-            installed       = $studioInstalled
-            version         = $studioVersion
-            path            = $studioPath
-            versionMethod   = $studioVersionMethod
-            discoverySource = $studioDiscoverySource
-            candidateCount  = $studioCandidates.Count
-        }
-        assistant = [ordered]@{
-            installed       = $assistantInstalled
-            version         = $assistantVersion
-            path            = $assistantPath
-            versionMethod   = $assistantVersionMethod
-            discoverySource = $assistantDiscoverySource
-            candidateCount  = $assistantCandidates.Count
-        }
-        robot = [ordered]@{
-            installed = ($null -ne $robotSelection)
-            version   = if ($null -ne $robotSelection) {
-                [string]$robotSelection.version
-            }
-            else {
-                $null
-            }
-            path      = if ($null -ne $robotSelection) {
-                [string]$robotSelection.path
-            }
-            else {
-                $null
-            }
-        }
-        updater = [ordered]@{
-            installed = ($null -ne $updaterSelection)
-            version   = if ($null -ne $updaterSelection) {
-                [string]$updaterSelection.version
-            }
-            else {
-                $null
-            }
-            path      = if ($null -ne $updaterSelection) {
-                [string]$updaterSelection.path
-            }
-            else {
-                $null
-            }
-        }
-        detection = [ordered]@{
-            registryEntryCount = $registryEntries.Count
-            searchRootCount    = $searchRootMap.Count
-            executableCount    = $allCandidates.Count
-        }
+    Write-Status OK 'UiPath Studio' "$studioVersion ($studioMethod)"
+    if ($assistantInstalled -and $assistantVersion) { Write-Status OK 'UiPath Assistant' "$assistantVersion ($assistantMethod)" } elseif ($assistantInstalled) { Write-Status WARN 'UiPath Assistant' 'version unknown' } else { Write-Status WARN 'UiPath Assistant' 'not found' }
+    $complete = $studioInstalled -and $studioVersion -and $assistantInstalled -and $assistantVersion
+    New-InventoryRecord $true $(if ($complete) { 'detected' } else { 'detected-partial' }) $studioVersion $source $(if ($studio) { $studio.path } else { $null }) $(if ($complete) { $null } elseif (-not $assistantInstalled) { 'UiPath Assistant is missing.' } else { 'UiPath Assistant version is unknown.' }) @{
+        inventoryComplete = [bool]$complete
+        studio = [ordered]@{ installed = $studioInstalled; version = $studioVersion; path = $(if ($studio) { $studio.path } else { $null }); versionMethod = $studioMethod; discoverySource = $(if ($studio) { $studio.discoverySource } else { $null }) }
+        assistant = [ordered]@{ installed = $assistantInstalled; version = $assistantVersion; path = $(if ($assistant) { $assistant.path } else { $null }); versionMethod = $assistantMethod; discoverySource = $(if ($assistant) { $assistant.discoverySource } else { $null }) }
+        robot = [ordered]@{ installed = ($null -ne $robot); version = $(if ($robot) { $robot.version } else { $null }); path = $(if ($robot) { $robot.path } else { $null }) }
+        updater = [ordered]@{ installed = ($null -ne $updater); version = $(if ($updater) { $updater.version } else { $null }); path = $(if ($updater) { $updater.path } else { $null }) }
+        detection = [ordered]@{ registryEntryCount = $reg.Count; searchRootCount = $roots.Count; executableCount = $all.Count }
     }
 }
-
-
-# ==============================================================================
-# 11. AUTOMATION ANYWHERE BOT AGENT
-# ==============================================================================
 
 function Get-AutomationAnywhereInventory {
-    $registryEntries = @(
-        Get-UninstallEntries `
-            -DisplayNamePattern '(?i)Automation Anywhere.*Bot Agent|Automation 360.*Bot Agent'
-    )
-
-    $installDirectories = [System.Collections.Generic.List[string]]::new()
-
-    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
-        $installDirectories.Add(
-            (Join-Path $env:ProgramFiles 'Automation Anywhere\Bot Agent')
-        )
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-        $installDirectories.Add(
-            (Join-Path $env:LOCALAPPDATA 'Programs\Automation Anywhere\Bot Agent')
-        )
-    }
-
-    $installDirectory = $installDirectories |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Container -ErrorAction SilentlyContinue } |
-        Select-Object -First 1
-
-    $registryVersion = $null
-    $registryDisplayName = $null
-
-    if ($registryEntries.Count -gt 0) {
-        $entry = $registryEntries |
-            Sort-Object -Property DisplayVersion -Descending |
-            Select-Object -First 1
-
-        $displayNameProperty = $entry.PSObject.Properties['DisplayName']
-        if ($null -ne $displayNameProperty) {
-            $registryDisplayName = [string]$displayNameProperty.Value
-        }
-
-        $displayVersionProperty = $entry.PSObject.Properties['DisplayVersion']
-        if (
-            $null -ne $displayVersionProperty -and
-            -not [string]::IsNullOrWhiteSpace([string]$displayVersionProperty.Value)
-        ) {
-            $registryVersion = [string]$displayVersionProperty.Value
-        }
-    }
-
-    $versionExecutable = $null
-
-    if ($installDirectory) {
-        foreach ($fileName in @(
-            'NodeManager.exe',
-            'AADiagnosticUtility.exe',
-            'BotLauncher.exe'
-        )) {
-            $candidate = Join-Path $installDirectory $fileName
-
-            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                $versionExecutable = $candidate
-                break
-            }
-        }
-    }
-
-    $version = $registryVersion
-    $versionMethod = $null
-
-    if ($registryVersion) {
-        $versionMethod = 'Windows uninstall registry'
-    }
-
-    if (-not $version -and $versionExecutable) {
-        $version = Get-FileVersion -Path $versionExecutable
-
-        if ($version) {
-            $versionMethod = 'Bot Agent executable metadata'
-        }
-    }
-
-    $anythingDetected = (
-        $registryEntries.Count -gt 0 -or
-        $null -ne $installDirectory
-    )
-
-    if (-not $anythingDetected) {
-        $message = 'Automation Anywhere Bot Agent was not detected. This is valid before the Automation Anywhere lab is configured.'
-        Write-Missing 'Automation Anywhere' $message
-
-        $record = New-MissingRecord -Message $message
-        $record['inventoryComplete'] = $false
-        return $record
-    }
-
-    if (-not $version) {
-        $message = 'Automation Anywhere Bot Agent was detected, but its version could not be determined.'
-        Write-WarningLine 'Automation Anywhere' $message
-
-        return [ordered]@{
-            installed         = $true
-            inventoryComplete = $false
-            status            = 'detected-version-unknown'
-            version           = $null
-            source            = 'windows-installation'
-            path              = $installDirectory
-            message           = $message
-            displayName       = $registryDisplayName
-            versionMethod     = $null
-        }
-    }
-
-    Write-Detected 'Automation Anywhere' "$version ($versionMethod)"
-
-    $record = New-InstalledRecord `
-        -Version $version `
-        -Source 'windows-installation' `
-        -Path $installDirectory `
-        -Extra @{
-            displayName       = $registryDisplayName
-            versionMethod     = $versionMethod
-            versionExecutable = $versionExecutable
-        }
-
-    $record['inventoryComplete'] = $true
-    return $record
+    $reg = @(Get-UninstallEntries '(?i)Automation Anywhere.*Bot Agent|Automation 360.*Bot Agent')
+    $dirs = @()
+    if ($env:ProgramFiles) { $dirs += Join-Path $env:ProgramFiles 'Automation Anywhere\Bot Agent' }
+    if ($env:LOCALAPPDATA) { $dirs += Join-Path $env:LOCALAPPDATA 'Programs\Automation Anywhere\Bot Agent' }
+    $dir = $dirs | Where-Object { Test-Path -LiteralPath $_ -PathType Container -ErrorAction SilentlyContinue } | Select-Object -First 1
+    $entry = $reg | Sort-Object DisplayVersion -Descending | Select-Object -First 1
+    $version = [string](Get-PropertyValue $entry 'DisplayVersion'); $method = if ($version) { 'Windows uninstall registry' } else { $null }; $versionExe = $null
+    if ($dir -and -not $version) { $versionExe = Get-FirstExistingFile @(('NodeManager.exe', 'AADiagnosticUtility.exe', 'BotLauncher.exe') | ForEach-Object { Join-Path $dir $_ }); if ($versionExe) { $version = Get-FileVersion $versionExe; if ($version) { $method = 'Bot Agent executable metadata' } } }
+    if (-not ($reg.Count -or $dir)) { $m = 'Automation Anywhere Bot Agent was not detected.'; Write-Status MISS 'Automation Anywhere' $m; return New-InventoryRecord $false 'missing' $null 'not-detected' $null $m @{ inventoryComplete = $false } }
+    if (-not $version) { $m = 'Automation Anywhere Bot Agent was detected, but its version is unknown.'; Write-Status WARN 'Automation Anywhere' $m; return New-InventoryRecord $true 'detected-version-unknown' $null 'windows-installation' $dir $m @{ inventoryComplete = $false; displayName = [string](Get-PropertyValue $entry 'DisplayName') } }
+    Write-Status OK 'Automation Anywhere' "$version ($method)"
+    New-InventoryRecord $true 'detected' $version 'windows-installation' $dir $null @{ inventoryComplete = $true; displayName = [string](Get-PropertyValue $entry 'DisplayName'); versionMethod = $method; versionExecutable = $versionExe }
 }
 
-# ==============================================================================
-# 12. COLLECT INVENTORY
-# ==============================================================================
+function Get-CoverageSummary {
+    param([System.Collections.IDictionary]$Map)
+    $missing = @($Map.GetEnumerator() | Where-Object { -not (Test-InventoryRecordComplete $_.Value) } | ForEach-Object { [string]$_.Key })
+    [ordered]@{ expectedCount = $Map.Count; detectedCount = $Map.Count - $missing.Count; missingOrUnusableCount = $missing.Count; missingOrUnusableTools = $missing; complete = ($missing.Count -eq 0) }
+}
 
-Write-Section 'Core tools'
+function Show-FinalSummary {
+    param([string]$Message, $CoreSummary, $VendorSummary)
+    Write-Section 'Inventory complete'
+    Write-Status OK 'toolchain.lock.json' $Message
+    Write-Host "Core tools detected        : $($CoreSummary.detectedCount) / $($CoreSummary.expectedCount)"
+    Write-Host "Evergreen clients detected : $($VendorSummary.detectedCount) / $($VendorSummary.expectedCount)"
+    foreach ($label in 'Core', 'Evergreen') {
+        $summary = if ($label -eq 'Core') { $CoreSummary } else { $VendorSummary }
+        if (-not $summary.complete) { Write-Host "$label missing/unusable: $($summary.missingOrUnusableTools -join ', ')" -ForegroundColor Yellow }
+    }
+}
 
-$Git = Get-CliInventory `
-    -DisplayName 'git' `
-    -CommandName 'git' `
-    -Importance core
+$ScriptDirectory = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([char[]]@('\', '/'))
+$RepoRoot = Find-ProjectRoot $ScriptDirectory $ProjectDirectoryName
+if (-not $RepoRoot) { Write-Host "FATAL: parent directory '$ProjectDirectoryName' not found." -ForegroundColor Red; exit 2 }
+$ProjectName = Split-Path $RepoRoot -Leaf
+$LockFile = Join-Path $RepoRoot 'toolchain.lock.json'
+$TempFile = "$LockFile.tmp-$PID"
+Set-Location -LiteralPath $RepoRoot
 
-$DotNet = Get-CliInventory `
-    -DisplayName 'dotnet' `
-    -CommandName 'dotnet' `
-    -Importance core
+Write-Section 'InvoiceOps toolchain inventory'
+Write-Status OK 'project root' $ProjectName
 
-$Python = Get-CliInventory `
-    -DisplayName 'python' `
-    -CommandName 'python' `
-    -VersionRegex '(?i)Python\s+(?<version>\d+(?:\.\d+){1,3})' `
-    -Importance core
-
-$Node = Get-CliInventory `
-    -DisplayName 'node' `
-    -CommandName 'node' `
-    -Importance core
-
+$cliSpecs = [ordered]@{
+    git = @{ DisplayName = 'git'; CommandName = 'git' }
+    dotnet = @{ DisplayName = 'dotnet'; CommandName = 'dotnet' }
+    python = @{ DisplayName = 'python'; CommandName = 'python'; VersionRegex = '(?i)Python\s+(?<version>\d+(?:\.\d+){1,3})' }
+    node = @{ DisplayName = 'node'; CommandName = 'node' }
+}
+$CoreTools = [ordered]@{}
+foreach ($name in $cliSpecs.Keys) { $spec = $cliSpecs[$name]; $CoreTools[$name] = Get-CliInventory @spec }
 $Pac = Get-PacInventory
-
 $Wsl = Get-WslInventory
-$Docker = Get-DockerInventory -WslInventory $Wsl
-
+$Docker = Get-DockerInventory $Wsl
 $Pad = Get-PadInventory
+$CoreTools.pac = $Pac
+$CoreTools.docker = $Docker
+$CoreTools.powerAutomateDesktop = $Pad
 
 Write-Section 'Evergreen vendor clients'
-
-try {
-    $UiPath = Get-UiPathInventory
-}
-catch {
-    $uiPathProbeError = $_.Exception.Message
-    Write-WarningLine `
-        'UiPath' `
-        "inventory probe failed without aborting the lock-file run: $uiPathProbeError"
-
-    $UiPath = [ordered]@{
-        installed         = $false
-        inventoryComplete = $false
-        status            = 'probe-error'
-        version           = $null
-        source            = 'inventory-error'
-        path              = $null
-        message           = $uiPathProbeError
-        studio            = [ordered]@{
-            installed       = $false
-            version         = $null
-            path            = $null
-            versionMethod   = $null
-            discoverySource = $null
-            candidateCount  = 0
-        }
-        assistant = [ordered]@{
-            installed       = $false
-            version         = $null
-            path            = $null
-            versionMethod   = $null
-            discoverySource = $null
-            candidateCount  = 0
-        }
-    }
-}
-
+$PowerBi = Get-PowerBiDesktopInventory
+try { $UiPath = Get-UiPathInventory }
+catch { $m = $_.Exception.Message; Write-Status WARN UiPath "probe failed: $m"; $UiPath = New-InventoryRecord $false 'probe-error' $null 'inventory-error' $null $m @{ inventoryComplete = $false } }
 $AutomationAnywhere = Get-AutomationAnywhereInventory
+$VendorClients = [ordered]@{ powerPlatformCli = $Pac; powerAutomateDesktop = $Pad; powerBiDesktop = $PowerBi; uiPath = $UiPath; automationAnywhere = $AutomationAnywhere }
 
 Write-Section 'Supplemental local context'
+$Uv = Get-CliInventory uv uv -Importance supplemental
+$Pnpm = Get-CliInventory pnpm pnpm -Importance supplemental
+if ($Wsl.installed) { Write-Status OK WSL "$(if ($Wsl.version) { $Wsl.version } else { 'version unknown' }); preferred: $(if ($Wsl.preferredDistro) { $Wsl.preferredDistro } else { 'none' })" } else { Write-Status WARN WSL 'not detected' }
+$Compose = if ($Docker.installed -and $Docker.composeVersion) { [ordered]@{ installed = $true; status = 'detected'; version = [string]$Docker.composeVersion; source = [string]$Docker.source } } else { [ordered]@{ installed = $false; status = 'missing-or-unknown'; version = $null; source = $null } }
 
-$Uv = Get-CliInventory `
-    -DisplayName 'uv' `
-    -CommandName 'uv' `
-    -Importance supplemental
-
-$Pnpm = Get-CliInventory `
-    -DisplayName 'pnpm' `
-    -CommandName 'pnpm' `
-    -Importance supplemental
-
-if ($Wsl.installed) {
-    $wslVersionLabel = 'version unknown'
-    if ($Wsl.version) {
-        $wslVersionLabel = [string]$Wsl.version
-    }
-
-    if ($Wsl.preferredDistro) {
-        Write-Detected 'WSL' "$wslVersionLabel; preferred: $($Wsl.preferredDistro)"
-    }
-    else {
-        Write-Detected 'WSL' "$wslVersionLabel; no distro detected"
-    }
-}
-else {
-    Write-WarningLine 'WSL' 'not detected'
-}
-
-# ==============================================================================
-# 13. STATUS SUMMARY
-# ==============================================================================
-
-$CoreTools = [ordered]@{
-    git                  = $Git
-    dotnet               = $DotNet
-    python               = $Python
-    node                 = $Node
-    pac                  = $Pac
-    docker               = $Docker
-    powerAutomateDesktop = $Pad
-}
-
-$coreDetected = @(
-    $CoreTools.GetEnumerator() |
-    Where-Object { Test-InventoryRecordComplete -Record $_.Value }
-).Count
-
-$coreMissingNames = @(
-    $CoreTools.GetEnumerator() |
-    Where-Object { -not (Test-InventoryRecordComplete -Record $_.Value) } |
-    ForEach-Object { [string]$_.Key }
-)
-
-$EvergreenVendorClients = [ordered]@{
-    powerPlatformCli      = $Pac
-    powerAutomateDesktop  = $Pad
-    uiPath                = $UiPath
-    automationAnywhere    = $AutomationAnywhere
-}
-
-$evergreenDetected = @(
-    $EvergreenVendorClients.GetEnumerator() |
-    Where-Object { Test-InventoryRecordComplete -Record $_.Value }
-).Count
-
-$evergreenMissingNames = @(
-    $EvergreenVendorClients.GetEnumerator() |
-    Where-Object { -not (Test-InventoryRecordComplete -Record $_.Value) } |
-    ForEach-Object { [string]$_.Key }
-)
-
-$DockerComposeRecord = [ordered]@{
-    installed = $false
-    status    = 'missing-or-unknown'
-    version   = $null
-    source    = $null
-}
-
-if (
-    $Docker.installed -and
-    -not [string]::IsNullOrWhiteSpace([string]$Docker.composeVersion)
-) {
-    $DockerComposeRecord = [ordered]@{
-        installed = $true
-        status    = 'detected'
-        version   = [string]$Docker.composeVersion
-        source    = [string]$Docker.source
-    }
-}
-
-# ==============================================================================
-# 14. BUILD LOCK OBJECT
-# ==============================================================================
-
-# The payload below intentionally excludes generatedAtUtc and inventorySha256.
-# It is hashed so repeated runs do not modify Git state when nothing changed.
-$InventoryPayload = [ordered]@{
-    schemaVersion = $SchemaVersion
-    project       = $ProjectName
-
-    policy = [ordered]@{
-        missingToolIsFatal = $false
-        missingToolEncoding = 'installed=false; version=null'
-    }
-
-    coverage = [ordered]@{
-        coreTools = @(
-            'git',
-            'dotnet',
-            'python',
-            'node',
-            'pac',
-            'docker',
-            'powerAutomateDesktop'
-        )
-
-        evergreenVendorClients = @(
-            'powerPlatformCli',
-            'powerAutomateDesktop',
-            'uiPath',
-            'automationAnywhere'
-        )
-    }
-
-    status = [ordered]@{
-        core = [ordered]@{
-            expectedCount          = $CoreTools.Count
-            detectedCount          = $coreDetected
-            missingOrUnusableCount = ($CoreTools.Count - $coreDetected)
-            missingOrUnusableTools = @($coreMissingNames)
-            complete               = ($coreDetected -eq $CoreTools.Count)
-        }
-
-        evergreenVendorClients = [ordered]@{
-            expectedCount          = $EvergreenVendorClients.Count
-            detectedCount          = $evergreenDetected
-            missingOrUnusableCount = ($EvergreenVendorClients.Count - $evergreenDetected)
-            missingOrUnusableTools = @($evergreenMissingNames)
-            complete               = ($evergreenDetected -eq $EvergreenVendorClients.Count)
-        }
-    }
-
+$CoreSummary = Get-CoverageSummary $CoreTools
+$VendorSummary = Get-CoverageSummary $VendorClients
+$Payload = [ordered]@{
+    project = $ProjectName
+    policy = [ordered]@{ missingToolIsFatal = $false; missingToolEncoding = 'installed=false; version=null' }
+    coverage = [ordered]@{ coreTools = @($CoreTools.Keys); evergreenVendorClients = @($VendorClients.Keys) }
+    status = [ordered]@{ core = $CoreSummary; evergreenVendorClients = $VendorSummary }
     host = Get-HostInventory
-
     tools = $CoreTools
-
-    evergreenVendorClients = $EvergreenVendorClients
-
-    supplemental = [ordered]@{
-        wsl           = $Wsl
-        uv            = $Uv
-        pnpm          = $Pnpm
-        dockerCompose = $DockerComposeRecord
-    }
+    evergreenVendorClients = $VendorClients
+    supplemental = [ordered]@{ wsl = $Wsl; uv = $Uv; pnpm = $Pnpm; dockerCompose = $Compose }
 }
-
-$PayloadJson = $InventoryPayload | ConvertTo-Json -Depth 24
-$PayloadJson = Protect-JsonUserPaths -Json $PayloadJson
-$InventorySha256 = Get-Sha256Text -Text $PayloadJson
-
-# Parse the privacy-normalized payload back into an ordered hashtable so the final
-# lock object contains only normalized user-specific paths.
-$SafeInventoryPayload = $PayloadJson |
-    ConvertFrom-Json -AsHashtable -Depth 24 -ErrorAction Stop
-
-$LockObject = [ordered]@{
-    schemaVersion   = $SchemaVersion
-    project         = $ProjectName
-    generatedAtUtc  = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-    inventorySha256 = $InventorySha256
-
-    policy                 = $SafeInventoryPayload.policy
-    coverage               = $SafeInventoryPayload.coverage
-    status                 = $SafeInventoryPayload.status
-    host                   = $SafeInventoryPayload.host
-    tools                  = $SafeInventoryPayload.tools
-    evergreenVendorClients = $SafeInventoryPayload.evergreenVendorClients
-    supplemental           = $SafeInventoryPayload.supplemental
+$PayloadJson = Protect-JsonUserPaths ($Payload | ConvertTo-Json -Depth 24)
+$Hash = Get-Sha256Text $PayloadJson
+$SafePayload = $PayloadJson | ConvertFrom-Json -AsHashtable -Depth 24 -ErrorAction Stop
+$Lock = [ordered]@{
+    project = $ProjectName
+    generatedAtUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    inventorySha256 = $Hash
+    policy = $SafePayload.policy
+    coverage = $SafePayload.coverage
+    status = $SafePayload.status
+    host = $SafePayload.host
+    tools = $SafePayload.tools
+    evergreenVendorClients = $SafePayload.evergreenVendorClients
+    supplemental = $SafePayload.supplemental
 }
-
-# ==============================================================================
-# 15. SERIALIZE + VALIDATE IN MEMORY
-# ==============================================================================
 
 try {
-    $Json = $LockObject | ConvertTo-Json -Depth 24
+    $Json = $Lock | ConvertTo-Json -Depth 24
     $Parsed = $Json | ConvertFrom-Json -Depth 24 -ErrorAction Stop
-
-    if ([int]$Parsed.schemaVersion -ne $SchemaVersion) {
-        throw 'Generated JSON has an unexpected schemaVersion.'
+    if ([string]$Parsed.project -ne $ProjectName) { throw 'Generated JSON has an unexpected project value.' }
+    foreach ($name in $CoreTools.Keys) {
+        $r = $Parsed.tools.$name
+        if ($null -eq $r -or -not ($r.PSObject.Properties.Name -contains 'installed') -or -not ($r.PSObject.Properties.Name -contains 'version')) { throw "Generated JSON is incomplete at tools.$name." }
     }
-
-    if ([string]$Parsed.project -ne $ProjectName) {
-        throw 'Generated JSON has an unexpected project value.'
-    }
-
-    foreach ($toolName in @(
-        'git',
-        'dotnet',
-        'python',
-        'node',
-        'pac',
-        'docker',
-        'powerAutomateDesktop'
-    )) {
-        if ($null -eq $Parsed.tools.$toolName) {
-            throw "Generated JSON is missing tools.$toolName."
-        }
-
-        if (-not ($Parsed.tools.$toolName.PSObject.Properties.Name -contains 'installed')) {
-            throw "Generated JSON is missing tools.$toolName.installed."
-        }
-
-        if (-not ($Parsed.tools.$toolName.PSObject.Properties.Name -contains 'version')) {
-            throw "Generated JSON is missing tools.$toolName.version."
-        }
-    }
-
-    foreach ($vendorClientName in @(
-        'powerPlatformCli',
-        'powerAutomateDesktop',
-        'uiPath',
-        'automationAnywhere'
-    )) {
-        if ($null -eq $Parsed.evergreenVendorClients.$vendorClientName) {
-            throw "Generated JSON is missing evergreenVendorClients.$vendorClientName."
-        }
-
-        if (
-            -not (
-                $Parsed.evergreenVendorClients.$vendorClientName.PSObject.Properties.Name `
-                    -contains 'installed'
-            )
-        ) {
-            throw "Generated JSON is missing evergreenVendorClients.$vendorClientName.installed."
-        }
+    foreach ($name in $VendorClients.Keys) {
+        $r = $Parsed.evergreenVendorClients.$name
+        if ($null -eq $r -or -not ($r.PSObject.Properties.Name -contains 'installed')) { throw "Generated JSON is incomplete at evergreenVendorClients.$name." }
     }
 }
-catch {
-    Write-Section 'FATAL · JSON generation/validation error'
-    Write-Host $_.Exception.Message -ForegroundColor Red
-    Write-Host ''
-    Write-Host 'toolchain.lock.json was not replaced.' -ForegroundColor Yellow
-    exit 1
-}
+catch { Write-Section 'FATAL JSON validation'; Write-Host $_.Exception.Message -ForegroundColor Red; exit 1 }
 
-# ==============================================================================
-# 16. DO NOT REWRITE AN UNCHANGED INVENTORY
-# ==============================================================================
-
-$InventoryUnchanged = $false
-
+$unchanged = $false
 if (Test-Path -LiteralPath $LockFile -PathType Leaf) {
-    try {
-        $existingText = Get-Content -LiteralPath $LockFile -Raw -Encoding UTF8
-        $existingJson = $existingText | ConvertFrom-Json -Depth 24 -ErrorAction Stop
-
-        if (
-            $existingJson.PSObject.Properties.Name -contains 'inventorySha256' -and
-            [string]$existingJson.inventorySha256 -eq $InventorySha256
-        ) {
-            $InventoryUnchanged = $true
-        }
-    }
-    catch {
-        Write-WarningLine 'existing lock' 'existing file is invalid/old; it will be replaced'
-    }
+    try { $old = Get-Content $LockFile -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 24 -ErrorAction Stop; $unchanged = ($old.PSObject.Properties.Name -contains 'inventorySha256' -and [string]$old.inventorySha256 -eq $Hash) }
+    catch { Write-Status WARN 'existing lock' 'invalid or incompatible; replacing' }
 }
-
-if ($InventoryUnchanged) {
-    Write-Section 'Inventory complete'
-
-    Write-Detected 'toolchain.lock.json' 'inventory unchanged; existing file kept'
-    Write-Host "Output: toolchain.lock.json" -ForegroundColor DarkGray
-
-    Write-Host ''
-    Write-Host "Core tools detected         : $coreDetected / $($CoreTools.Count)"
-    Write-Host "Evergreen clients detected  : $evergreenDetected / $($EvergreenVendorClients.Count)"
-
-    if ($coreDetected -ne $CoreTools.Count) {
-        Write-Host ''
-        Write-Host 'Core tools currently missing/unusable:' -ForegroundColor Red
-        foreach ($name in $coreMissingNames) {
-            Write-Host "  - $name" -ForegroundColor Red
-        }
-    }
-
-    if ($evergreenDetected -ne $EvergreenVendorClients.Count) {
-        Write-Host ''
-        Write-Host 'Evergreen vendor clients currently missing/unusable:' -ForegroundColor Red
-        foreach ($name in $evergreenMissingNames) {
-            Write-Host "  - $name" -ForegroundColor Red
-        }
-    }
-
-    Write-Host ''
-    Write-Host 'Exit code: 0 (inventory succeeded; missing software is recorded, not fatal).' `
-        -ForegroundColor Green
-    exit 0
-}
-
-# ==============================================================================
-# 17. ATOMIC WRITE + ON-DISK JSON VALIDATION
-# ==============================================================================
+if ($unchanged) { Show-FinalSummary 'inventory unchanged; existing file kept' $CoreSummary $VendorSummary; exit 0 }
 
 try {
-    if (Test-Path -LiteralPath $TemporaryLockFile) {
-        Remove-Item -LiteralPath $TemporaryLockFile -Force
-    }
-
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-
-    [System.IO.File]::WriteAllText(
-        $TemporaryLockFile,
-        ($Json + [Environment]::NewLine),
-        $utf8NoBom
-    )
-
-    # Validate the actual bytes written before replacing the real lock file.
-    $writtenText = [System.IO.File]::ReadAllText(
-        $TemporaryLockFile,
-        [System.Text.Encoding]::UTF8
-    )
-
-    $writtenJson = $writtenText | ConvertFrom-Json -Depth 24 -ErrorAction Stop
-
-    if ([string]$writtenJson.inventorySha256 -ne $InventorySha256) {
-        throw 'On-disk JSON validation failed: inventorySha256 mismatch.'
-    }
-
-    Move-Item `
-        -LiteralPath $TemporaryLockFile `
-        -Destination $LockFile `
-        -Force
+    if (Test-Path $TempFile) { Remove-Item $TempFile -Force }
+    [IO.File]::WriteAllText($TempFile, $Json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    $written = [IO.File]::ReadAllText($TempFile, [Text.Encoding]::UTF8) | ConvertFrom-Json -Depth 24 -ErrorAction Stop
+    if ([string]$written.inventorySha256 -ne $Hash) { throw 'On-disk inventory hash mismatch.' }
+    Move-Item $TempFile $LockFile -Force
 }
 catch {
-    if (Test-Path -LiteralPath $TemporaryLockFile) {
-        Remove-Item `
-            -LiteralPath $TemporaryLockFile `
-            -Force `
-            -ErrorAction SilentlyContinue
-    }
-
-    Write-Section 'FATAL · write error'
-    Write-Host $_.Exception.Message -ForegroundColor Red
-    Write-Host ''
-    Write-Host 'Could not safely write toolchain.lock.json.' -ForegroundColor Red
-    exit 1
+    if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
+    Write-Section 'FATAL write error'; Write-Host $_.Exception.Message -ForegroundColor Red; exit 1
 }
 
-# ==============================================================================
-# 18. FINAL REPORT
-# ==============================================================================
-
-Write-Section 'Inventory written successfully'
-
-Write-Detected 'toolchain.lock.json' 'valid JSON written'
-Write-Host "Output : toolchain.lock.json" -ForegroundColor DarkGray
-Write-Host "SHA-256: $InventorySha256" -ForegroundColor DarkGray
-
-Write-Host ''
-Write-Host "Core tools detected         : $coreDetected / $($CoreTools.Count)"
-Write-Host "Evergreen clients detected  : $evergreenDetected / $($EvergreenVendorClients.Count)"
-
-if ($coreDetected -ne $CoreTools.Count) {
-    Write-Host ''
-    Write-Host 'Core tools currently missing/unusable:' -ForegroundColor Red
-
-    foreach ($name in $coreMissingNames) {
-        Write-Host "  - $name" -ForegroundColor Red
-    }
-}
-
-if ($evergreenDetected -ne $EvergreenVendorClients.Count) {
-    Write-Host ''
-    Write-Host 'Evergreen vendor clients currently missing/unusable:' -ForegroundColor Red
-
-    foreach ($name in $evergreenMissingNames) {
-        Write-Host "  - $name" -ForegroundColor Red
-    }
-}
-
-Write-Host ''
-Write-Host 'Missing tools are intentionally recorded in JSON and do not fail inventory.' `
-    -ForegroundColor Yellow
-Write-Host 'Exit code: 0' -ForegroundColor Green
+Show-FinalSummary 'valid JSON written' $CoreSummary $VendorSummary
 exit 0
