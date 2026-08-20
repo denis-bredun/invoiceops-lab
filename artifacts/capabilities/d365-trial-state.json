@@ -1,0 +1,117 @@
+{
+  "capability": "d365-sales-trial",
+  "state": "AVAILABLE",
+  "guardStatus": "OK",
+  "exitCode": 0,
+  "checkedAtUtc": "2026-08-20T23:21:32.3482086Z",
+  "durationMs": 14057,
+  "reasonCode": "LIVE_SALES_CAPABILITY_VERIFIED",
+  "reason": "Trial Dataverse and Dynamics 365 Sales are reachable now.",
+  "policy": {
+    "decisionSource": "live-pac-dataverse-probe",
+    "expiryDateUsedForDecision": false,
+    "externalSkipStates": [
+      "UNAVAILABLE",
+      "EXPIRED",
+      "ADMIN_BLOCKED"
+    ],
+    "internalErrorExitCode": 20,
+    "salesAppMatchMode": "Any",
+    "requiredSalesAppUniqueNames": [
+      "msdynce_saleshub",
+      "msdynce_salestrialhub"
+    ],
+    "restorePreviousProfile": true
+  },
+  "observed": {
+    "liveEnvironmentProbeSucceeded": true,
+    "environmentIdentityShapeValid": true,
+    "salesModelQuerySucceeded": true,
+    "matchedSalesAppUniqueNames": [
+      "msdynce_saleshub",
+      "msdynce_salestrialhub"
+    ]
+  },
+  "checks": {
+    "pacCli": {
+      "name": "pac-cli",
+      "required": true,
+      "status": "PASS",
+      "attempts": 0,
+      "exitCode": null,
+      "timedOut": false,
+      "durationMs": null,
+      "note": "PAC CLI executable was found."
+    },
+    "previousProfileCapture": {
+      "name": "previous-profile-capture",
+      "required": false,
+      "status": "PASS",
+      "attempts": 1,
+      "exitCode": 0,
+      "timedOut": false,
+      "durationMs": 4354,
+      "note": "Active PAC profile captured."
+    },
+    "trialProfileSelect": {
+      "name": "trial-profile-select",
+      "required": true,
+      "status": "PASS",
+      "attempts": 1,
+      "exitCode": 0,
+      "timedOut": false,
+      "durationMs": 1734,
+      "note": "Trial PAC profile was selected."
+    },
+    "environmentProbe": {
+      "name": "environment-probe",
+      "required": true,
+      "status": "PASS",
+      "attempts": 1,
+      "exitCode": 0,
+      "timedOut": false,
+      "durationMs": 3473,
+      "note": "Dataverse environment responded to pac env who --json."
+    },
+    "environmentShape": {
+      "name": "environment-identity-shape",
+      "required": true,
+      "status": "PASS",
+      "attempts": 0,
+      "exitCode": null,
+      "timedOut": false,
+      "durationMs": null,
+      "note": "Dataverse identity fields are structurally valid."
+    },
+    "salesModelQuery": {
+      "name": "sales-model-query",
+      "required": true,
+      "status": "PASS",
+      "attempts": 1,
+      "exitCode": 0,
+      "timedOut": false,
+      "durationMs": 2549,
+      "note": "Model-driven app inventory was queried successfully."
+    },
+    "salesAppDetection": {
+      "name": "sales-app-detection",
+      "required": true,
+      "status": "PASS",
+      "attempts": 0,
+      "exitCode": null,
+      "timedOut": false,
+      "durationMs": null,
+      "note": "Required Dynamics 365 Sales app signature was detected."
+    },
+    "profileRestore": {
+      "name": "profile-restore",
+      "required": true,
+      "status": "SKIP",
+      "attempts": 0,
+      "exitCode": null,
+      "timedOut": false,
+      "durationMs": null,
+      "note": "The restore target is already the trial profile."
+    }
+  }
+}
