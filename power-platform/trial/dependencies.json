@@ -1,0 +1,12 @@
+[
+  {
+    "solution": "InvoiceOpsTrialPortable",
+    "missingDependencyCount": 0,
+    "hasMissingDependencies": false
+  },
+  {
+    "solution": "InvoiceOpsD365SalesAdapter",
+    "missingDependencyCount": 0,
+    "hasMissingDependencies": false
+  }
+]

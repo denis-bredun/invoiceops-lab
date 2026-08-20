@@ -943,6 +943,8 @@ ollama-models/
 !tests/security-fixtures/
 !tests/security-fixtures/**
 
+!power-platform/trial/exported/InvoiceOpsTrialPortable_1.0.0.0.zip
+!power-platform/trial/exported/InvoiceOpsD365SalesAdapter_1.0.0.0.zip
 
 # ==============================================================================
 # END
