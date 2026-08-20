@@ -1,8 +1,7 @@
 {
-  "schemaVersion": 4,
   "project": "invoiceops-lab",
-  "generatedAtUtc": "2026-08-17T22:18:21.941Z",
-  "inventorySha256": "76571ddb821c737c8acf1e615f75ef6357598d5897c383de73cf50c387a41c17",
+  "generatedAtUtc": "2026-08-20T19:38:53.923Z",
+  "inventorySha256": "1f17a17dabc1e0991d3ad4cf4938e85be0398a4fc634d78f9af66a1892c227c0",
   "policy": {
     "missingToolIsFatal": false,
     "missingToolEncoding": "installed=false; version=null"
@@ -20,6 +19,7 @@
     "evergreenVendorClients": [
       "powerPlatformCli",
       "powerAutomateDesktop",
+      "powerBiDesktop",
       "uiPath",
       "automationAnywhere"
     ]
@@ -33,8 +33,8 @@
       "complete": true
     },
     "evergreenVendorClients": {
-      "expectedCount": 4,
-      "detectedCount": 4,
+      "expectedCount": 5,
+      "detectedCount": 5,
       "missingOrUnusableCount": 0,
       "missingOrUnusableTools": [],
       "complete": true
@@ -47,7 +47,7 @@
     "powerShell": {
       "installed": true,
       "status": "detected",
-      "version": "7.6.3",
+      "version": "7.6.5",
       "edition": "Core",
       "path": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
     }
@@ -59,7 +59,7 @@
       "version": "2.55.0.windows.4",
       "source": "windows-path",
       "path": "C:\\Program Files\\Git\\cmd\\git.exe",
-      "message": null
+      "message": ""
     },
     "dotnet": {
       "installed": true,
@@ -67,7 +67,7 @@
       "version": "10.0.400",
       "source": "windows-path",
       "path": "C:\\Program Files\\dotnet\\dotnet.exe",
-      "message": null
+      "message": ""
     },
     "python": {
       "installed": true,
@@ -75,7 +75,7 @@
       "version": "3.14.7",
       "source": "windows-path",
       "path": "C:\\Python314\\python.exe",
-      "message": null
+      "message": ""
     },
     "node": {
       "installed": true,
@@ -83,7 +83,7 @@
       "version": "24.19.0",
       "source": "windows-path",
       "path": "C:\\Program Files\\nodejs\\node.exe",
-      "message": null
+      "message": ""
     },
     "pac": {
       "installed": true,
@@ -91,7 +91,7 @@
       "version": "2.11.2+g47bc199",
       "source": "windows-path",
       "path": "%USERPROFILE%\\.dotnet\\tools\\pac.exe",
-      "message": null,
+      "message": "",
       "versionMethod": "pac"
     },
     "docker": {
@@ -100,9 +100,9 @@
       "version": "29.7.2",
       "source": "windows-path",
       "path": "%LOCALAPPDATA%\\Programs\\DockerDesktop\\resources\\bin\\docker.exe",
-      "message": null,
-      "composeVersion": "5.4.0",
-      "distribution": null
+      "message": "",
+      "distribution": null,
+      "composeVersion": "5.4.0"
     },
     "powerAutomateDesktop": {
       "installed": true,
@@ -110,10 +110,10 @@
       "version": "2.70.00187.26189",
       "source": "msi",
       "path": "C:\\Program Files (x86)\\Power Automate Desktop\\dotnet\\PAD.Console.Host.exe",
-      "message": null,
-      "installType": "msi",
+      "message": "",
+      "displayName": "Power Automate for desktop",
       "packageName": null,
-      "displayName": "Power Automate for desktop"
+      "installType": "msi"
     }
   },
   "evergreenVendorClients": {
@@ -123,7 +123,7 @@
       "version": "2.11.2+g47bc199",
       "source": "windows-path",
       "path": "%USERPROFILE%\\.dotnet\\tools\\pac.exe",
-      "message": null,
+      "message": "",
       "versionMethod": "pac"
     },
     "powerAutomateDesktop": {
@@ -132,49 +132,58 @@
       "version": "2.70.00187.26189",
       "source": "msi",
       "path": "C:\\Program Files (x86)\\Power Automate Desktop\\dotnet\\PAD.Console.Host.exe",
-      "message": null,
-      "installType": "msi",
+      "message": "",
+      "displayName": "Power Automate for desktop",
       "packageName": null,
-      "displayName": "Power Automate for desktop"
+      "installType": "msi"
+    },
+    "powerBiDesktop": {
+      "installed": true,
+      "status": "detected",
+      "version": "2.157.879.0",
+      "source": "msix",
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.MicrosoftPowerBIDesktop_2.157.879.0_x64__8wekyb3d8bbwe\\bin\\PBIDesktop.exe",
+      "message": "",
+      "packageName": "Microsoft.MicrosoftPowerBIDesktop",
+      "versionMethod": "PBIDesktop.exe metadata",
+      "installType": "msix"
     },
     "uiPath": {
       "installed": true,
-      "inventoryComplete": true,
       "status": "detected",
-      "version": "26.0.199-cloud.24445",
+      "version": "26.0.200-cloud.24635",
       "source": "uipath-platform-installer",
-      "path": "C:\\Program Files\\UiPathPlatform\\Studio\\26.0.199-cloud.24445\\UiPath.Studio.exe",
-      "message": null,
+      "path": "C:\\Program Files\\UiPathPlatform\\Studio\\26.0.200-cloud.24635\\UiPath.Studio.exe",
+      "message": "",
+      "robot": {
+        "installed": true,
+        "version": "26.0.200-cloud.24635",
+        "path": "C:\\Program Files\\UiPathPlatform\\Robot\\26.0.200-cloud.24635\\UiRobot.exe"
+      },
+      "inventoryComplete": true,
       "studio": {
         "installed": true,
-        "version": "26.0.199-cloud.24445",
-        "path": "C:\\Program Files\\UiPathPlatform\\Studio\\26.0.199-cloud.24445\\UiPath.Studio.exe",
-        "versionMethod": "UiPathPlatform versioned install directory",
-        "discoverySource": "Windows Start Menu shortcut",
-        "candidateCount": 2
+        "version": "26.0.200-cloud.24635",
+        "path": "C:\\Program Files\\UiPathPlatform\\Studio\\26.0.200-cloud.24635\\UiPath.Studio.exe",
+        "versionMethod": "UiPathPlatform install directory",
+        "discoverySource": "Start Menu shortcut"
+      },
+      "detection": {
+        "registryEntryCount": 1,
+        "searchRootCount": 6,
+        "executableCount": 5
       },
       "assistant": {
         "installed": true,
-        "version": "26.0.199-cloud.24445",
-        "path": "C:\\Program Files\\UiPathPlatform\\Robot\\26.0.199-cloud.24445\\UiPathAssistant\\UiPath.Assistant.exe",
-        "versionMethod": "UiPathPlatform versioned install directory",
-        "discoverySource": "Windows Start Menu shortcut",
-        "candidateCount": 1
-      },
-      "robot": {
-        "installed": true,
-        "version": "26.0.199-cloud.24445",
-        "path": "C:\\Program Files\\UiPathPlatform\\Robot\\26.0.199-cloud.24445\\UiRobot.exe"
+        "version": "26.0.200-cloud.24635",
+        "path": "C:\\Program Files\\UiPathPlatform\\Robot\\26.0.200-cloud.24635\\UiPathAssistant\\UiPath.Assistant.exe",
+        "versionMethod": "UiPathPlatform install directory",
+        "discoverySource": "Start Menu shortcut"
       },
       "updater": {
         "installed": true,
         "version": "24.4.0-dev",
         "path": "C:\\Program Files\\UiPathPlatform\\Updater\\UiPath.Connected.Updater.App.exe"
-      },
-      "detection": {
-        "registryEntryCount": 1,
-        "searchRootCount": 7,
-        "executableCount": 5
       }
     },
     "automationAnywhere": {
@@ -183,10 +192,10 @@
       "version": "23.0.32",
       "source": "windows-installation",
       "path": "C:\\Program Files\\Automation Anywhere\\Bot Agent",
-      "message": null,
-      "versionExecutable": "C:\\Program Files\\Automation Anywhere\\Bot Agent\\AADiagnosticUtility.exe",
-      "versionMethod": "Windows uninstall registry",
+      "message": "",
       "displayName": "Automation Anywhere Bot Agent",
+      "versionExecutable": null,
+      "versionMethod": "Windows uninstall registry",
       "inventoryComplete": true
     }
   },
@@ -194,7 +203,7 @@
     "wsl": {
       "installed": true,
       "status": "detected",
-      "version": "2.7.11.0",
+      "version": "2.7.12.0",
       "path": "C:\\Windows\\system32\\wsl.exe",
       "distributions": [
         "Ubuntu-24.04",
@@ -211,7 +220,7 @@
       "version": "0.12.5",
       "source": "windows-path",
       "path": "%USERPROFILE%\\.local\\bin\\uv.exe",
-      "message": null
+      "message": ""
     },
     "pnpm": {
       "installed": true,
@@ -219,7 +228,7 @@
       "version": "11.22.0",
       "source": "windows-path",
       "path": "%APPDATA%\\npm\\pnpm.ps1",
-      "message": null
+      "message": ""
     },
     "dockerCompose": {
       "installed": true,
